@@ -1,0 +1,61 @@
+# PNAS 一键部署编排(架构 ADR-01/03/07)
+# 用法:
+#   cp .env.example .env   # 按需修改
+#   docker compose up -d --build
+# 对外唯一入口为 web(nginx);app 与 db 只在内部网络可达。
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pnas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-pnas}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pnas} -d ${POSTGRES_DB:-pnas}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pnas-net
+
+  app:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PNAS_DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-pnas}
+      PNAS_DB_USER: ${POSTGRES_USER:-pnas}
+      PNAS_DB_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      PNAS_DATA_DIR: /var/lib/pnas
+      PNAS_REQUIRE_TLS: "false"   # TLS 在 nginx 层终止;内网直连 app 仅限内部网络
+    volumes:
+      - pnas-data:/var/lib/pnas
+    networks:
+      - pnas-net
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "${PNAS_HTTP_PORT:-8080}:80"
+    networks:
+      - pnas-net
+
+volumes:
+  pgdata:
+  pnas-data:
+
+networks:
+  pnas-net:

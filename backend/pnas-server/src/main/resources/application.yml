@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: pnas-server
+  datasource:
+    url: ${PNAS_DB_URL:jdbc:postgresql://localhost:5432/pnas}
+    username: ${PNAS_DB_USER:pnas}
+    password: ${PNAS_DB_PASSWORD:pnas}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  servlet:
+    multipart:
+      max-file-size: 16MB   # 分块上传按块走 API,常规 multipart 仅作小文件兜底
+      max-request-size: 32MB
+
+server:
+  port: 8080
+  forward-headers-strategy: framework   # 位于 nginx 之后时保留真实协议/来源
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+pnas:
+  data-dir: ${PNAS_DATA_DIR:./data}     # blobs / derived / tmp / export 的根目录(与系统分离)
+  security:
+    # 生产默认 HTTPS;此开关仅供纯内网开发环境显式关闭
+    require-tls: ${PNAS_REQUIRE_TLS:true}
+  upload:
+    chunk-size: 4194304                 # 4 MiB(与 ADR-06 一致)
+    max-file-size: ${PNAS_MAX_UPLOAD:107374182400}   # 100 GiB 上限
+
+logging:
+  level:
+    com.pnas: INFO
