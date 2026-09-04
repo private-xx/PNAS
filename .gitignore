@@ -16,6 +16,7 @@ node_modules/
 frontend/dist/
 dist/
 *.local
+.npm-cache/
 
 # --- 环境与密钥(示例文件除外) ---
 .env
@@ -29,6 +30,9 @@ data/
 logs/
 *.log
 tmp/
+
+# --- 本地工具链(如便携 JDK) ---
+.tools/
 
 # --- OS 打包产物(agent, M4) ---
 agent/build/
