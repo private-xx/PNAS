@@ -36,3 +36,6 @@ tmp/
 
 # --- OS 打包产物(agent, M4) ---
 agent/build/
+
+# --- Superpowers SDD 工作区 ---
+.superpowers/
