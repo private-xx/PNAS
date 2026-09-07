@@ -12,10 +12,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
-import java.util.Random;
 import java.util.UUID;
 
 /** 会话生命周期:登录(创建会话)、登出(吊销)。CSRF 强校验由 {@code CsrfGuardFilter} 统一负责。 */
@@ -25,7 +25,7 @@ public class AuthService {
     private final UserRepository users;
     private final ServerSessionRepository sessions;
     private final PasswordEncoder encoder;
-    private final Random random = new Random();
+    private final SecureRandom random = new SecureRandom();
 
     public AuthService(UserRepository users, ServerSessionRepository sessions, PasswordEncoder encoder) {
         this.users = users;

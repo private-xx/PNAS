@@ -22,8 +22,12 @@ public class SecurityConfig {
     PasswordEncoder passwordEncoder() { return Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8(); }
 
     @Bean
-    SecurityFilterChain chain(HttpSecurity http, SessionAuthFilter sessionFilter,
-                              CsrfGuardFilter csrf) throws Exception {
+    SecurityFilterChain chain(HttpSecurity http, ServerSessionRepository sessions,
+                              UserRepository users) throws Exception {
+        // 过滤器在此处内联实例化(而非注册为 @Bean),避免 Spring Boot 将其当作
+        // 通用 servlet Filter 二次自动注册,导致同一请求内重复执行两遍。
+        SessionAuthFilter sessionFilter = new SessionAuthFilter(sessions, users);
+        CsrfGuardFilter csrf = new CsrfGuardFilter(sessions);
         http.csrf(c -> c.disable())
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
@@ -34,15 +38,5 @@ public class SecurityConfig {
             .addFilterBefore(sessionFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterAfter(csrf, SessionAuthFilter.class);
         return http.build();
-    }
-
-    @Bean
-    SessionAuthFilter sessionAuthFilter(ServerSessionRepository sessions, UserRepository users) {
-        return new SessionAuthFilter(sessions, users);
-    }
-
-    @Bean
-    CsrfGuardFilter csrfGuardFilter(ServerSessionRepository sessions) {
-        return new CsrfGuardFilter(sessions);
     }
 }

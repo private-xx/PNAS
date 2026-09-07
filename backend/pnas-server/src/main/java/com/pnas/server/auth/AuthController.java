@@ -1,11 +1,13 @@
 package com.pnas.server.auth;
 
 import com.pnas.common.error.ErrorCode;
+import com.pnas.server.common.PnasProperties;
 import com.pnas.server.common.error.BusinessException;
 import com.pnas.server.iam.UserRepository;
-import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,10 +23,12 @@ import java.util.Map;
 public class AuthController {
     private final AuthService auth;
     private final UserRepository users;
+    private final PnasProperties props;
 
-    public AuthController(AuthService auth, UserRepository users) {
+    public AuthController(AuthService auth, UserRepository users, PnasProperties props) {
         this.auth = auth;
         this.users = users;
+        this.props = props;
     }
 
     public record LoginRequest(String username, String password) {}
@@ -33,11 +37,14 @@ public class AuthController {
     public Map<String, String> login(@RequestBody LoginRequest req, HttpServletResponse res) {
         String combined = auth.createSession(req.username(), req.password());
         String[] parts = combined.split("\\|", 2);
-        Cookie c = new Cookie("PNAS_SESSION", parts[0]);
-        c.setHttpOnly(true);
-        c.setPath("/");
-        c.setMaxAge(30 * 24 * 3600);
-        res.addCookie(c);
+        ResponseCookie c = ResponseCookie.from("PNAS_SESSION", parts[0])
+            .httpOnly(true)
+            .secure(props.security().requireTls())
+            .sameSite("Lax")
+            .path("/")
+            .maxAge(30 * 24 * 3600)
+            .build();
+        res.addHeader(HttpHeaders.SET_COOKIE, c.toString());
         res.setHeader("X-CSRF-Token", parts[1]);
         return Map.of("status", "ok");
     }
