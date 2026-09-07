@@ -25,7 +25,7 @@ class ServerSessionRepositoryTest extends AbstractIntegrationTest {
 
     @Test
     void findsSessionByTokenHashAndTracksLifetime() {
-        User bob = users.save(User.create("bob", "Bob", "hash-1", User.Role.MEMBER));
+        User bob = users.save(User.create("bob-session", "Bob", "hash-1", User.Role.MEMBER));
         Instant now = Instant.now();
         ServerSession saved = sessions.save(
             ServerSession.create(bob, "tok-abc", "csrf-abc", now, Duration.ofMinutes(30)));

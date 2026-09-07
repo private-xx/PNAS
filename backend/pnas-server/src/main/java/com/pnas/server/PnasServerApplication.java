@@ -1,8 +1,11 @@
 package com.pnas.server;
 
+import com.pnas.server.iam.UserService;
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.context.annotation.Bean;
 
 /**
  * PNAS Server 入口。
@@ -16,5 +19,10 @@ public class PnasServerApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(PnasServerApplication.class, args);
+    }
+
+    @Bean
+    CommandLineRunner bootstrapAdmin(UserService userService) {
+        return args -> userService.bootstrapAdmin();
     }
 }

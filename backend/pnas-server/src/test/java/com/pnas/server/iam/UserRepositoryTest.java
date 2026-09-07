@@ -24,7 +24,10 @@ class UserRepositoryTest extends AbstractIntegrationTest {
         users.save(User.create("alice", "Alice", "hash-1", User.Role.MEMBER));
         assertThat(users.findByUsername("alice")).isPresent();
         assertThat(users.existsByUsername("alice")).isTrue();
-        assertThat(users.findAllByOrderByCreatedAtDesc()).hasSize(1);
+        // 共享单例库中已存在启动引导的 admin(以及其它集成测试提交的用户),故只断言 alice 在场而非绝对数量。
+        assertThat(users.findAllByOrderByCreatedAtDesc())
+            .extracting(User::getUsername)
+            .contains("alice");
     }
 
     @Test

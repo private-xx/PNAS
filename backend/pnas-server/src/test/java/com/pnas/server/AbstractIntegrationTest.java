@@ -31,5 +31,7 @@ public abstract class AbstractIntegrationTest {
         r.add("spring.datasource.password", POSTGRES::getPassword);
         r.add("pnas.data-dir", () -> "build/test-data/" + System.nanoTime());
         r.add("pnas.security.require-tls", () -> "false");
+        r.add("pnas.bootstrap.admin-username", () -> "admin");
+        r.add("pnas.bootstrap.admin-password", () -> "admin-secret");
     }
 }
