@@ -11,6 +11,9 @@ target/
 *.jar
 !.mvn/wrapper/*.jar
 
+# 集成测试运行时数据目录(build/test-data/...)
+backend/pnas-server/build/
+
 # --- Node / 前端 ---
 node_modules/
 frontend/dist/
