@@ -2,6 +2,7 @@ package com.pnas.server;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
  * PNAS Server 入口。
@@ -10,6 +11,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * 通过 profile/启动参数可拆出独立 worker 进程(见架构设计 ADR-01)。</p>
  */
 @SpringBootApplication
+@ConfigurationPropertiesScan
 public class PnasServerApplication {
 
     public static void main(String[] args) {
