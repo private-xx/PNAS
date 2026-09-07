@@ -1,6 +1,6 @@
 # PNAS 进度记录
 
-> 记录每个里程碑的关键结果与断点信息,便于随时恢复。最后更新:2026(M0-R2 需求严谨化完成,M2 骨架阶段)。
+> 记录每个里程碑的关键结果与断点信息,便于随时恢复。最后更新:2026-09-07(M2 SDD 执行中,断点待续)。
 
 ## 总体状态
 
@@ -8,9 +8,17 @@
 |---|---|---|
 | M0 | 需求分析 | ✅ [requirements-analysis.md](requirements-analysis.md) v0.3 已确认(M0 + 严谨化评审 M0-R2,2026) |
 | M1 | 架构设计 | ✅ [architecture-design.md](architecture-design.md) v0.3,ADR-01~12 全部确认,与需求 v0.3 同步 |
-| M2 | MVP 实现 | 🔨 仓库骨架完成,核心模块待实现(见下) |
+| M2 | MVP 实现 | 🔨 执行中(分支 `m2-mvp`,SDD 方式):后端 Task 0–5 完成、Task 6 半程;前端 Task 10–13 未启动(见下方断点) |
 | M3–M6 | 媒体 / 备份 / 流媒体加固 / 验收 | 待启动 |
 | M7 | 后续立项(镜像同步、移动通道评估等 Could 项) | 待启动 |
+
+## M2 SDD 执行断点(2026-09-07,用户暂停待续)
+
+- 执行计划:`docs/superpowers/plans/2026-09-07-m2-mvp.md`(14 任务,TDD 化)
+- SDD 账本(权威断点):`.superpowers/sdd/2026-09-07-m2-mvp/progress.md`(已 gitignore,含全部 Ruling 与任务状态)
+- 提交链(m2-mvp):`7962214 → 6765c94(T1) → 2a94dfd(T2) → 05448b8+7df53af(T3) → 6340811(T5) → cf48ad0(T6-A)`
+- Task 6 恢复步骤与命令、执行模式裁决(R11 混合模式)见账本尾部"⏸️ 断点"一节
+- 环境:JAVA_HOME=`.tools/jdk-21.0.12.1+1/Contents/Home`;Maven 需 `-s ../.tools/maven-settings.xml`;Docker 已运行且所需镜像已本地
 
 ## 已完成(截至本次断点)
 
