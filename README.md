@@ -8,8 +8,8 @@
 
 | 文档 | 说明 |
 |---|---|
-| [需求分析](docs/requirements-analysis.md) | v0.2 已确认(M0) |
-| [系统架构设计](docs/architecture-design.md) | v0.2 已确认,ADR-01~12 全部通过(M1) |
+| [需求分析](docs/requirements-analysis.md) | v0.3 已确认(M0 + 严谨化评审,2026) |
+| [系统架构设计](docs/architecture-design.md) | v0.3 已确认,ADR-01~12 全部通过,与需求 v0.3 同步 |
 
 ## 路线图
 

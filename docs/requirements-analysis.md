@@ -5,7 +5,7 @@
 | 版本 | v0.3(严谨化修订稿) |
 | 日期 | 2026 |
 | 状态 | ✅ M0 通过 + 方法论评审通过(M0-R2) |
-| 后续文档 | 《系统架构设计》见 docs/architecture-design.md v0.2 |
+| 后续文档 | 《系统架构设计》见 docs/architecture-design.md v0.3 |
 
 **修订记录**
 
