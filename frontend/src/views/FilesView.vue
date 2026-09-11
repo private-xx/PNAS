@@ -12,6 +12,20 @@ const showTrash = ref(false)
 const newDirName = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragActive = ref(false)
+const versions = ref<nodesApi.VersionDto[]>([])
+const versionsVisible = ref(false)
+const versionsTitle = ref('')
+
+async function openVersions(node: nodesApi.NodeDto) {
+  versionsTitle.value = node.name
+  versions.value = []
+  versionsVisible.value = true
+  try {
+    versions.value = await nodesApi.listVersions(node.id)
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '读取版本历史失败'))
+  }
+}
 
 const currentParentId = computed(() => (crumbs.value.length ? crumbs.value[crumbs.value.length - 1].id : null))
 
@@ -180,6 +194,7 @@ onMounted(reload)
             <el-button v-if="row.kind === 'FILE'" size="small" text tag="a" :href="nodesApi.contentUrl(row.id)">
               下载
             </el-button>
+            <el-button v-if="row.kind === 'FILE'" size="small" text @click="openVersions(row)">版本</el-button>
             <el-button size="small" text @click="rename(row)">重命名</el-button>
             <el-button size="small" text type="danger" @click="removeNode(row)">删除</el-button>
           </template>
@@ -212,6 +227,15 @@ onMounted(reload)
         </el-button>
       </div>
     </div>
+    <el-dialog v-model="versionsVisible" :title="`版本历史 - ${versionsTitle}`" width="min(560px, 92vw)">
+      <el-table :data="versions" size="small" empty-text="暂无版本">
+        <el-table-column prop="versionNo" label="版本" width="80" />
+        <el-table-column label="大小" width="110">
+          <template #default="{ row }">{{ sizeText(row.sizeBytes) }}</template>
+        </el-table-column>
+        <el-table-column prop="createdAt" label="创建时间" />
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
