@@ -1,6 +1,6 @@
 # PNAS 进度记录
 
-> 记录每个里程碑的关键结果与断点信息,便于随时恢复。最后更新:2026-09-07(M2 SDD 执行中,断点待续)。
+> 记录每个里程碑的关键结果与断点信息,便于随时恢复。最后更新:2026-09-11(M2 MVP 实现完成,待最终评审)。
 
 ## 总体状态
 
@@ -8,17 +8,18 @@
 |---|---|---|
 | M0 | 需求分析 | ✅ [requirements-analysis.md](requirements-analysis.md) v0.3 已确认(M0 + 严谨化评审 M0-R2,2026) |
 | M1 | 架构设计 | ✅ [architecture-design.md](architecture-design.md) v0.3,ADR-01~12 全部确认,与需求 v0.3 同步 |
-| M2 | MVP 实现 | 🔨 执行中(分支 `m2-mvp`,SDD 方式):后端 Task 0–5 完成、Task 6 半程;前端 Task 10–13 未启动(见下方断点) |
+| M2 | MVP 实现 | ✅ 分支 `m2-mvp`:14 任务全部实现并逐任务评审;后端全套件 **36/36**、前端构建通过、端到端验收 **PASS=21/FAIL=0**(待最终 whole-branch review) |
 | M3–M6 | 媒体 / 备份 / 流媒体加固 / 验收 | 待启动 |
 | M7 | 后续立项(镜像同步、移动通道评估等 Could 项) | 待启动 |
 
-## M2 SDD 执行断点(2026-09-07,用户暂停待续)
+## M2 完成情况(2026-09-11)
 
-- 执行计划:`docs/superpowers/plans/2026-09-07-m2-mvp.md`(14 任务,TDD 化)
-- SDD 账本(权威断点):`.superpowers/sdd/2026-09-07-m2-mvp/progress.md`(已 gitignore,含全部 Ruling 与任务状态)
-- 提交链(m2-mvp):`7962214 → 6765c94(T1) → 2a94dfd(T2) → 05448b8+7df53af(T3) → 6340811(T5) → cf48ad0(T6-A)`
-- Task 6 恢复步骤与命令、执行模式裁决(R11 混合模式)见账本尾部"⏸️ 断点"一节
-- 环境:JAVA_HOME=`.tools/jdk-21.0.12.1+1/Contents/Home`;Maven 需 `-s ../.tools/maven-settings.xml`;Docker 已运行且所需镜像已本地
+- 执行计划:`docs/superpowers/plans/2026-09-07-m2-mvp.md`(14 任务,TDD 化;subagent 驱动执行)
+- SDD 账本(含全部裁决 R1–R18 与 deferred minors):`.superpowers/sdd/2026-09-07-m2-mvp/progress.md`(gitignore)
+- 提交链(m2-mvp):`7962214 → 6765c94(T1) → 2a94dfd(T2) → 05448b8+7df53af(T3) → 6340811(T5) → cf48ad0+c1022cd+16556f9(T6) → a9723e1+1f5ef02(T4) → 1a23449(T7) → 1a72da5(T8) → 7bb4469(T9) → ac86672(前端 T10–12) → 4ed6f17(修复轮) → e02b0cb(验收脚本幂等化) → b3f9609(preview 同源网关)`
+- 验收证据:`scripts/acceptance-m2.sh` → **PASS=21 / FAIL=0**(两用户隔离、4 MiB 分块上传与哈希一致、断点续传、Range 206/416、删除→回收站→恢复);同源网关路径(SPA 托管 + `/api` 反代 + CSRF)已验证;生产 nginx 配置见 `deploy/nginx/default.conf`(运行时验证因镜像源不可用而改用等价方案,见账本)
+- 已推送到 GitHub:`main`(文档+骨架基线)与 `m2-mvp`(全部实现提交)
+- 环境:JAVA_HOME=`.tools/jdk-21.0.12.1+1/Contents/Home`;Maven 需 `-s ../.tools/maven-settings.xml`;Docker 已运行(postgres/ryuk 镜像本地)
 
 ## 已完成(截至本次断点)
 
