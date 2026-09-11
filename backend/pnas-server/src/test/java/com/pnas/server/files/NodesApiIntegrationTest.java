@@ -51,6 +51,58 @@ class NodesApiIntegrationTest extends AbstractIntegrationTest {
         return res.getResponse().getContentAsString();
     }
 
+    /** 经管理员创建成员并登录,返回其会话。 */
+    private Auth newMember(Auth admin) throws Exception {
+        String name = "iso-bob-" + UUID.randomUUID().toString().substring(0, 8);
+        mvc.perform(post("/api/v1/users")
+                .header("Cookie", admin.cookie()).header("X-CSRF", admin.csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"" + name + "\",\"displayName\":\"Bob\",\"password\":\"secret123\"}"))
+            .andExpect(status().isOk());
+        return login(name, "secret123");
+    }
+
+    @Test
+    void memberCannotMutateForeignNodes() throws Exception {
+        var admin = login("admin", "admin-secret");
+        String created = createDirJson(admin, null, "隔离-写-" + UUID.randomUUID());
+        String adminHomeId = JsonPath.read(created, "$.parentId");
+        String nodeId = JsonPath.read(created, "$.id");
+        var bob = newMember(admin);
+
+        // 在他人目录下建目录 → 403
+        mvc.perform(post("/api/v1/nodes")
+                .header("Cookie", bob.cookie()).header("X-CSRF", bob.csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"parentId\":\"" + adminHomeId + "\",\"name\":\"越权目录\"}"))
+            .andExpect(status().isForbidden());
+
+        // 改名 / 删除他人节点 → 403
+        mvc.perform(patch("/api/v1/nodes/{id}", nodeId)
+                .header("Cookie", bob.cookie()).header("X-CSRF", bob.csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"越权改名\"}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(delete("/api/v1/nodes/{id}", nodeId)
+                .header("Cookie", bob.cookie()).header("X-CSRF", bob.csrf()))
+            .andExpect(status().isForbidden());
+
+        // 管理员删除后,成员也不能恢复 → 403
+        mvc.perform(delete("/api/v1/nodes/{id}", nodeId)
+                .header("Cookie", admin.cookie()).header("X-CSRF", admin.csrf()))
+            .andExpect(status().isNoContent());
+        mvc.perform(post("/api/v1/nodes/{id}/restore", nodeId)
+                .header("Cookie", bob.cookie()).header("X-CSRF", bob.csrf()))
+            .andExpect(status().isForbidden());
+
+        // 他人文件:版本查询也应 403(目录本身无版本,属 400,故这里用文件验证权限)
+        var adminUser = users.findByUsername("admin").orElseThrow();
+        UUID uploadId = uploads.start(adminUser, UUID.fromString(adminHomeId),
+            "负向-" + UUID.randomUUID() + ".txt", 0);
+        var file = uploads.complete(adminUser.getId(), uploadId);
+        mvc.perform(get("/api/v1/nodes/{id}/versions", file.nodeId()).header("Cookie", bob.cookie()))
+            .andExpect(status().isForbidden());
+    }
+
     @Test
     void listedHomeIsIsolatedBetweenUsers() throws Exception {
         var admin = login("admin", "admin-secret");
