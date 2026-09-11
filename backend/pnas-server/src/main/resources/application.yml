@@ -39,6 +39,13 @@ pnas:
   upload:
     chunk-size: 4194304                 # 4 MiB(与 ADR-06 一致)
     max-file-size: ${PNAS_MAX_UPLOAD:107374182400}   # 100 GiB 上限
+  bootstrap:
+    # 首次启动(users 表为空)时创建管理员;密码留空则不引导
+    admin-username: ${PNAS_BOOTSTRAP_ADMIN_USERNAME:admin}
+    admin-password: ${PNAS_BOOTSTRAP_ADMIN_PASSWORD:}
+  jobs:
+    scheduler-enabled: ${PNAS_JOBS_SCHEDULER:true}
+    interval-ms: ${PNAS_JOBS_INTERVAL_MS:5000}
 
 logging:
   level:

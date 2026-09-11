@@ -1,38 +1,60 @@
 <script setup lang="ts">
-// M2 占位页:后续接入 vue-router(登录/文件/媒体/影音/管理)与 Pinia
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useSessionStore } from '@/stores/session'
+
+const session = useSessionStore()
+const route = useRoute()
+const router = useRouter()
+
+const isLoginPage = computed(() => route.name === 'login')
+
+async function logout() {
+  await session.logout()
+  await router.replace({ name: 'login' })
+}
 </script>
 
 <template>
-  <main class="splash">
-    <h1>PNAS</h1>
-    <p class="tagline">Personal NAS · 自研进行中(M2 MVP)</p>
-    <ul class="hints">
-      <li>架构:Java 21 + Spring Boot + PostgreSQL + nginx + Vue 3</li>
-      <li>规划:文件/照片视频/影音/集中备份</li>
-    </ul>
-  </main>
+  <div class="app">
+    <header v-if="!isLoginPage" class="topbar">
+      <div class="brand">PNAS</div>
+      <div class="spacer" />
+      <span class="user">{{ session.displayName || session.username }}</span>
+      <el-button size="small" text @click="logout">退出</el-button>
+    </header>
+    <main class="content">
+      <router-view />
+    </main>
+  </div>
 </template>
 
 <style scoped>
-.splash {
+.app {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+.topbar {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  color: #2c3e50;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: #fff;
+  border-bottom: 1px solid #ebeef5;
 }
-h1 {
-  font-size: 3rem;
-  margin: 0;
-  letter-spacing: 0.4rem;
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.2rem;
 }
-.tagline {
-  color: #7f8c8d;
+.spacer {
+  flex: 1;
 }
-.hints {
-  color: #95a5a6;
-  font-size: 0.85rem;
+.user {
+  color: #606266;
+  font-size: 0.9rem;
+}
+.content {
+  flex: 1;
 }
 </style>
