@@ -29,4 +29,14 @@ export default defineConfig({
       },
     },
   },
+  // 生产由 nginx 托管 dist 并反代 /api、/events(见 deploy/nginx/default.conf);
+  // preview 提供等价的同源网关,便于本地验收(端口 8082)。
+  preview: {
+    port: 8082,
+    strictPort: true,
+    proxy: {
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      '/events': { target: 'http://localhost:8080', changeOrigin: true },
+    },
+  },
 })
