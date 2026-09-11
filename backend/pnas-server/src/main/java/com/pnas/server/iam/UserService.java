@@ -33,13 +33,19 @@ public class UserService {
 
     @Transactional
     public User createMember(String username, String displayName, String rawPassword) {
-        if (users.existsByUsername(username)) {
+        String name = username == null ? "" : username.trim();
+        if (name.isEmpty()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "用户名不能为空");
+        }
+        // 先归一化再查重,否则 " admin" 会绕过检查并在唯一约束上炸出 500
+        if (users.existsByUsername(name)) {
             throw new BusinessException(ErrorCode.USERNAME_TAKEN, HttpStatus.CONFLICT, "用户名已存在");
         }
         if (rawPassword == null || rawPassword.length() < 8) {
             throw new BusinessException(ErrorCode.WEAK_PASSWORD, HttpStatus.BAD_REQUEST, "密码至少 8 位");
         }
-        return users.save(User.create(username, displayName,
+        String shown = (displayName == null || displayName.isBlank()) ? name : displayName.trim();
+        return users.save(User.create(name, shown,
             encoder.encode(rawPassword), User.Role.MEMBER));
     }
 }

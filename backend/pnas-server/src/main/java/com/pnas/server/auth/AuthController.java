@@ -62,8 +62,12 @@ public class AuthController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(@AuthenticationPrincipal SessionPrincipal me, HttpServletResponse res) {
         auth.logout(me.sessionId());
+        // 同时清除两个 Cookie,避免已吊销会话的 Cookie 残留
         res.addHeader(HttpHeaders.SET_COOKIE, ResponseCookie.from("PNAS_CSRF", "")
             .httpOnly(false).sameSite("Lax").path("/").maxAge(0).build().toString());
+        res.addHeader(HttpHeaders.SET_COOKIE, ResponseCookie.from("PNAS_SESSION", "")
+            .httpOnly(true).secure(props.security().requireTls()).sameSite("Lax").path("/")
+            .maxAge(0).build().toString());
     }
 
     @GetMapping("/session")

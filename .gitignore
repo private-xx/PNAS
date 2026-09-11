@@ -20,6 +20,7 @@ frontend/dist/
 dist/
 *.local
 .npm-cache/
+*.tsbuildinfo
 
 # --- 环境与密钥(示例文件除外) ---
 .env

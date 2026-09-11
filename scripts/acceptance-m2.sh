@@ -133,5 +133,13 @@ curl -s -b "$COOKIE_ADMIN" -o "$WORK/restored.bin" "$API/nodes/$NODE_ID/content"
 check "恢复后内容哈希一致" "$(shasum -a 256 "$WORK/restored.bin" | awk '{print $1}')" "$SHA_LOCAL"
 
 echo
+echo "[9] 认证与 CSRF 边界"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/nodes")
+check "匿名访问受保护端点返回 401" "$code" "401"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_ADMIN" -X POST "$API/nodes" \
+  -H 'Content-Type: application/json' -d '{"parentId":null,"name":"缺CSRF-探针"}')
+check "状态变更缺少 X-CSRF 返回 403" "$code" "403"
+
+echo
 echo "== 结果: PASS=$PASS FAIL=$FAIL =="
 [ "$FAIL" -eq 0 ] || exit 1

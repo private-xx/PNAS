@@ -1,20 +1,44 @@
 import { ref, type Ref } from 'vue'
 import * as uploadsApi from '@/api/uploads'
 import { errorMessage } from '@/api/http'
+import { uuid } from '@/api/sha256'
 
-export type UploadStatus = 'pending' | 'uploading' | 'done' | 'error'
+export type UploadStatus = 'pending' | 'uploading' | 'done' | 'error' | 'cancelled'
 
 export interface UploadTask {
   id: string
   file: File
   progress: number
   status: UploadStatus
+  uploadId?: string
   message?: string
 }
 
-const PROGRESS_KEY = 'pnas-upload-progress'
+const RESUME_KEY = 'pnas-upload-resume'
 const CONCURRENCY = 3
 const CHUNK_RETRIES = 3
+
+interface ResumeEntry {
+  uploadId: string
+  sent: number[]
+}
+
+/** 文件指纹:同名同大小同修改时间视为同一文件的续传目标。 */
+function fingerprint(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`
+}
+
+function loadResume(): Record<string, ResumeEntry> {
+  try {
+    return JSON.parse(localStorage.getItem(RESUME_KEY) ?? '{}') as Record<string, ResumeEntry>
+  } catch {
+    return {}
+  }
+}
+
+function saveResume(map: Record<string, ResumeEntry>): void {
+  localStorage.setItem(RESUME_KEY, JSON.stringify(map))
+}
 
 async function putChunkWithRetry(uploadId: string, seq: number, blob: Blob): Promise<void> {
   let lastError: unknown
@@ -32,21 +56,9 @@ async function putChunkWithRetry(uploadId: string, seq: number, blob: Blob): Pro
   throw lastError instanceof Error ? lastError : new Error('分块上传失败')
 }
 
-/** 记录 每会话已成功的分块序号,用于刷新/网络中断后的断点续传。 */
-function loadProgress(): Record<string, number[]> {
-  try {
-    return JSON.parse(localStorage.getItem(PROGRESS_KEY) ?? '{}') as Record<string, number[]>
-  } catch {
-    return {}
-  }
-}
-
-function saveProgress(map: Record<string, number[]>): void {
-  localStorage.setItem(PROGRESS_KEY, JSON.stringify(map))
-}
-
 /**
- * 分块上传器:并发 3、逐块校验哈希、断点续传(本地记录已完成块)、完成后回调刷新列表。
+ * 分块上传器:并发 3、逐块 SHA-256、失败重试;
+ * **刷新/中断后可续**:以文件指纹持久化 uploadId 与已传块号,重新选择同一文件即接着传。
  */
 export function useUploader(destParentId: () => string | null, onCompleted: () => void) {
   const tasks: Ref<UploadTask[]> = ref([])
@@ -57,26 +69,38 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
       throw new Error('未选择目标目录')
     }
     task.status = 'uploading'
-    const uploadId = await uploadsApi.startUpload(parentId, task.file)
-    const total = Math.max(1, Math.ceil(task.file.size / uploadsApi.CHUNK_SIZE))
-    const progressMap = loadProgress()
-    const sent = new Set<number>(progressMap[uploadId] ?? [])
 
+    const fp = fingerprint(task.file)
+    const resume = loadResume()
+    let uploadId = task.uploadId ?? resume[fp]?.uploadId
+    let sent = new Set<number>(resume[fp]?.sent ?? [])
+
+    if (!uploadId) {
+      uploadId = await uploadsApi.startUpload(parentId, task.file)
+      sent = new Set<number>()
+      resume[fp] = { uploadId, sent: [] }
+      saveResume(resume)
+    }
+    task.uploadId = uploadId
+
+    const total = Math.max(1, Math.ceil(task.file.size / uploadsApi.CHUNK_SIZE))
     for (let seq = 0; seq < total; seq++) {
       if (!sent.has(seq)) {
         const start = seq * uploadsApi.CHUNK_SIZE
         const blob = task.file.slice(start, Math.min(task.file.size, start + uploadsApi.CHUNK_SIZE))
         await putChunkWithRetry(uploadId, seq, blob)
         sent.add(seq)
-        progressMap[uploadId] = Array.from(sent)
-        saveProgress(progressMap)
+        const current = loadResume()
+        current[fp] = { uploadId, sent: Array.from(sent) }
+        saveResume(current)
       }
       task.progress = Math.round(((seq + 1) / total) * 100)
     }
 
     await uploadsApi.completeUpload(uploadId)
-    delete progressMap[uploadId]
-    saveProgress(progressMap)
+    const done = loadResume()
+    delete done[fp]
+    saveResume(done)
     task.progress = 100
     task.status = 'done'
     onCompleted()
@@ -90,8 +114,10 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
         try {
           await uploadOne(next)
         } catch (error) {
-          next.status = 'error'
-          next.message = errorMessage(error, '上传失败')
+          if (next.status !== 'cancelled') {
+            next.status = 'error'
+            next.message = errorMessage(error, '上传失败')
+          }
         }
         next = queue.shift()
       }
@@ -102,7 +128,7 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
   async function enqueue(files: FileList | File[]): Promise<void> {
     for (const file of Array.from(files)) {
       tasks.value.push({
-        id: crypto.randomUUID(),
+        id: uuid(),
         file,
         progress: 0,
         status: 'pending',
@@ -111,7 +137,7 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
     await drain()
   }
 
-  /** 重试失败的任务(复用同一 task 与已记录的分块进度)。 */
+  /** 重试失败的任务(复用已记录的 uploadId 与分块进度)。 */
   async function retryTask(id: string): Promise<void> {
     const task = tasks.value.find((t) => t.id === id)
     if (!task || task.status !== 'error') {
@@ -122,10 +148,30 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
     await drain()
   }
 
-  /** 清理已完成的任务(避免队列无限增长)。 */
-  function clearFinished(): void {
-    tasks.value = tasks.value.filter((t) => t.status !== 'done')
+  /** 取消上传:通知服务端作废会话,并清理本地续传记录。 */
+  async function cancelTask(id: string): Promise<void> {
+    const task = tasks.value.find((t) => t.id === id)
+    if (!task || task.status === 'done') {
+      return
+    }
+    if (task.uploadId) {
+      try {
+        await uploadsApi.cancelUpload(task.uploadId)
+      } catch {
+        /* 会话可能已失效,忽略 */
+      }
+    }
+    const map = loadResume()
+    delete map[fingerprint(task.file)]
+    saveResume(map)
+    task.status = 'cancelled'
+    task.message = '已取消'
   }
 
-  return { tasks, enqueue, retryTask, clearFinished }
+  /** 清理已结束的任务(避免队列无限增长)。 */
+  function clearFinished(): void {
+    tasks.value = tasks.value.filter((t) => t.status !== 'done' && t.status !== 'cancelled')
+  }
+
+  return { tasks, enqueue, retryTask, cancelTask, clearFinished }
 }

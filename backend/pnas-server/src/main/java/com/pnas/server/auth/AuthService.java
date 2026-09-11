@@ -22,32 +22,59 @@ import java.util.UUID;
 @Service
 public class AuthService {
     private static final Duration TTL = Duration.ofDays(30);
+    private static final int MAX_FAILURES = 5;
+    private static final Duration LOCK_TIME = Duration.ofMinutes(5);
+
     private final UserRepository users;
     private final ServerSessionRepository sessions;
     private final PasswordEncoder encoder;
     private final SecureRandom random = new SecureRandom();
+    /** 用户名 → 连续失败计数与锁定截止(内存实现;单机 M2,M5 加固时改为持久化 + IP 维度)。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, Attempt> attempts =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    /** 用于用户名不存在时也执行一次哈希比对,消除用户名枚举的时序差异。 */
+    private final String timingGuardHash;
+
+    private record Attempt(int failures, Instant lockedUntil) {}
 
     public AuthService(UserRepository users, ServerSessionRepository sessions, PasswordEncoder encoder) {
         this.users = users;
         this.sessions = sessions;
         this.encoder = encoder;
+        this.timingGuardHash = encoder.encode("timing-guard-not-a-real-password");
     }
 
     @Transactional
     public String createSession(String username, String rawPassword) {
-        User u = users.findByUsername(username)
-            .orElseThrow(() -> new BusinessException(
-                ErrorCode.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED, "用户名或密码错误"));
-        if (!encoder.matches(rawPassword, u.getPasswordHash())) {
+        String name = username == null ? "" : username.trim();
+        Attempt attempt = attempts.get(name);
+        if (attempt != null && attempt.lockedUntil() != null
+            && attempt.lockedUntil().isAfter(Instant.now())) {
+            throw new BusinessException(ErrorCode.ACCOUNT_LOCKED, HttpStatus.TOO_MANY_REQUESTS,
+                "登录失败次数过多,请在 " + LOCK_TIME.toMinutes() + " 分钟后重试");
+        }
+        User u = users.findByUsername(name).orElse(null);
+        boolean ok = encoder.matches(rawPassword == null ? "" : rawPassword,
+            u != null ? u.getPasswordHash() : timingGuardHash);
+        if (u == null || !ok) {
+            registerFailure(name, attempt);
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS,
                 HttpStatus.UNAUTHORIZED, "用户名或密码错误");
         }
+        attempts.remove(name);
         String token = randomToken();
         String csrf = randomToken();
         var session = ServerSession.create(u, sha(token),
             sha(csrf), Instant.now(), TTL);
         sessions.save(session);
         return token + "|" + csrf;
+    }
+
+    /** 连续失败计数;达到阈值则锁定一段时间(FR-AUTH-03 失败锁定 + 退避)。 */
+    private void registerFailure(String name, Attempt previous) {
+        int failures = (previous == null ? 0 : previous.failures()) + 1;
+        Instant lockedUntil = failures >= MAX_FAILURES ? Instant.now().plus(LOCK_TIME) : null;
+        attempts.put(name, new Attempt(failures >= MAX_FAILURES ? 0 : failures, lockedUntil));
     }
 
     @Transactional

@@ -1,14 +1,24 @@
 import { http } from './http'
+import { sha256HexJs } from './sha256'
 
 /** 与服务端 Global Constraints 一致:固定 4 MiB 分块。 */
 export const CHUNK_SIZE = 4 * 1024 * 1024
 
+/**
+ * 计算分块 SHA-256。
+ * 优先 WebCrypto(仅安全上下文可用);纯 HTTP 局域网访问时回退到纯 JS 实现,
+ * 否则无法计算 X-Sha256,分块上传会在浏览器侧整体失败。
+ */
 export async function sha256Hex(blob: Blob): Promise<string> {
   const buffer = await blob.arrayBuffer()
-  const digest = await crypto.subtle.digest('SHA-256', buffer)
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
+  const subtle = globalThis.crypto?.subtle
+  if (subtle) {
+    const digest = await subtle.digest('SHA-256', buffer)
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+  }
+  return sha256HexJs(new Uint8Array(buffer))
 }
 
 export async function startUpload(destParentId: string, file: File): Promise<string> {

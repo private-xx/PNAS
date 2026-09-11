@@ -21,4 +21,15 @@ class FileBlobStoreTest {
         byte[] read = store.open(sha).readAllBytes();
         assertThat(read).isEqualTo(data);
     }
+
+    @Test
+    void wrongDeclaredSizeIsRejected() throws Exception {
+        byte[] data = "size-check".getBytes(StandardCharsets.UTF_8);
+        String sha = Sha256.hex(data);
+        var store = new FileBlobStore(dir);
+
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class,
+            () -> store.store(new ByteArrayInputStream(data), data.length + 1, sha));
+        assertThat(store.exists(sha)).isFalse(); // 未通过长度校验的块不得入库
+    }
 }

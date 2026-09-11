@@ -64,7 +64,7 @@ async function submit() {
   justify-content: center;
 }
 .login-card {
-  width: 360px;
+  width: min(360px, 92vw);
 }
 .title {
   margin: 0;

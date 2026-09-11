@@ -87,6 +87,32 @@ class AuthFlowIntegrationTest extends AbstractIntegrationTest {
             .andExpect(status().isForbidden());
     }
 
+    @Test
+    void repeatedFailuresLockTheAccount() throws Exception {
+        String username = "lock-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        String bad = "{\"username\":\"" + username + "\",\"password\":\"wrong-password\"}";
+
+        for (int i = 0; i < 5; i++) {
+            mvc.perform(post("/api/v1/auth/login")
+                    .contentType(MediaType.APPLICATION_JSON).content(bad))
+                .andExpect(status().isUnauthorized());
+        }
+        // 第 6 次即使密码正确也应被锁定(FR-AUTH-03 失败锁定)
+        mvc.perform(post("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"" + username + "\",\"password\":\"secret123\"}"))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("登录失败次数过多")));
+    }
+
+    @Test
+    void malformedJsonReturnsUnifiedErrorBody() throws Exception {
+        mvc.perform(post("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON).content("{not-json"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("bad_request"));
+    }
+
     private String loginToken(String body) throws Exception {
         var login = mvc.perform(post("/api/v1/auth/login")
                 .contentType(MediaType.APPLICATION_JSON).content(body))

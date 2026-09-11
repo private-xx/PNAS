@@ -99,6 +99,25 @@ class UploadServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void sameNameDirectoryBlocksFileWrite() {
+        var admin = admin();
+        var home = files.ensureUserHome(admin);
+        String name = "clash-" + UUID.randomUUID();
+        files.createDir(new com.pnas.server.auth.SessionPrincipal(
+            admin.getId(), admin.getUsername(), admin.getRole(), UUID.randomUUID()), home.getId(), name);
+
+        byte[] content = "payload".getBytes(StandardCharsets.UTF_8);
+        UUID uploadId = uploads.start(admin, home.getId(), name, content.length);
+        uploads.acceptChunk(admin.getId(), uploadId, 0, new ByteArrayInputStream(content),
+            Sha256.hex(content));
+
+        // 同名目录存在时,complete 必须拒绝(P2 评审 Critical#1:否则会给目录挂上文件版本)
+        assertThatThrownBy(() -> uploads.complete(admin.getId(), uploadId))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("同名目录");
+    }
+
+    @Test
     void negativeSizeIsRejected() {
         var admin = admin();
         var home = files.ensureUserHome(admin);

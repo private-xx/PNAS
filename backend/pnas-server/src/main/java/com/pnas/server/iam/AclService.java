@@ -29,7 +29,7 @@ import java.util.UUID;
 @Service
 public class AclService {
 
-    private static final Set<Character> VALID = Set.of('r', 'w', 'd', 'a', '-');
+    private static final Set<Character> VALID = Set.of('r', 'w', 'd', '-');
 
     /** 权限条目 DTO(接口层用;principalType = USER|GROUP)。 */
     public record EntryDto(String principalType, UUID principalId, String perms, Boolean inherit) {}
@@ -63,22 +63,47 @@ public class AclService {
             return false; // 管理权限仅 owner/ADMIN
         }
         List<UUID> groupIds = groups.findGroupIdsByUserId(me.userId());
-        UUID current = node.getId();
+        UUID target = node.getId();
+
+        // 先展开 目标→根 的节点链(便于两轮判定:先 DENY,再最近命中授权)
+        List<UUID> chain = new ArrayList<>();
         Set<UUID> visited = new HashSet<>();
+        UUID current = target;
         while (current != null && visited.add(current)) {
-            List<AclEntry> relevant = acls.findByNodeId(current).stream()
-                .filter(e -> matches(e, me.userId(), groupIds))
-                .toList();
-            if (!relevant.isEmpty()) {
-                if (relevant.stream().anyMatch(e -> e.getPerms().contains("-"))) {
-                    return false; // 显式拒绝优先
-                }
-                return relevant.stream().anyMatch(e -> e.getPerms().indexOf(perm) >= 0);
-            }
+            chain.add(current);
             Node n = nodes.findById(current).orElse(null);
             current = (n == null || n.getParent() == null) ? null : n.getParent().getId();
         }
+
+        // 规则 1:全链**显式拒绝优先**——祖先 DENY 不会被更近层级的 GRANT 覆盖
+        for (UUID id : chain) {
+            boolean denied = acls.findByNodeId(id).stream()
+                .filter(e -> matches(e, me.userId(), groupIds))
+                .filter(e -> applies(e, id, target))
+                .anyMatch(e -> e.getPerms().contains("-"));
+            if (denied) {
+                return false;
+            }
+        }
+        // 规则 2:最近的"有命中"层级决定授权
+        for (UUID id : chain) {
+            List<AclEntry> relevant = acls.findByNodeId(id).stream()
+                .filter(e -> matches(e, me.userId(), groupIds))
+                .filter(e -> applies(e, id, target))
+                .toList();
+            if (!relevant.isEmpty()) {
+                return relevant.stream().anyMatch(e -> e.getPerms().indexOf(perm) >= 0);
+            }
+        }
         return false; // 默认拒绝
+    }
+
+    /**
+     * 条目是否作用于目标节点:目标节点自身的条目总是生效;
+     * 祖先条目仅当 {@code inherited=true} 时才向下继承(P1 评审 Critical#1:此前该字段被忽略,导致 inherit=false 仍越权授权)。
+     */
+    private boolean applies(AclEntry e, UUID entryNodeId, UUID targetNodeId) {
+        return entryNodeId.equals(targetNodeId) || e.isInherited();
     }
 
     @Transactional(readOnly = true)
@@ -133,7 +158,7 @@ public class AclService {
         for (char c : dto.perms().toCharArray()) {
             if (!VALID.contains(c)) {
                 throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST,
-                    "非法权限字符: " + c + "(允许 r/w/d/a/-)");
+                    "非法权限字符: " + c + "(允许 r/w/d/-;管理权限 'a' 由 owner/ADMIN 隐含,不可授予)");
             }
         }
         var type = parseType(dto.principalType());

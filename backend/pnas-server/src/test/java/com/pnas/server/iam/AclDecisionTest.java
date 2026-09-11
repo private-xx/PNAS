@@ -134,12 +134,33 @@ class AclDecisionTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void nullEntriesIsRejected() {
-        var alice = user("acl-alice8");
+    void nonInheritingEntryDoesNotGrantDescendant() {
+        var alice = user("acl-alice9");
+        var bob = user("acl-bob9");
         Node home = files.ensureUserHome(alice);
+        Node sub = nodes.save(Node.dir(alice, home, "no-inherit"));
 
-        assertThatThrownBy(() -> acl.setAcl(principal(alice), home.getId(), null))
-            .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("不能为空");
+        // 在 home 上给 bob 授权,但显式 inherit=false → 子目录不应继承
+        acl.setAcl(principal(alice), home.getId(), List.of(
+            new AclService.EntryDto("USER", bob.getId(), "r", false)));
+
+        assertThat(acl.hasPermission(principal(bob), home.getId(), 'r')).isTrue();  // 目标节点自身条目生效
+        assertThat(acl.hasPermission(principal(bob), sub.getId(), 'r')).isFalse();  // 不向下继承
+    }
+
+    @Test
+    void ancestorDenyBlocksNearerGrant() {
+        var alice = user("acl-alice10");
+        var bob = user("acl-bob10");
+        Node home = files.ensureUserHome(alice);
+        Node sub = nodes.save(Node.dir(alice, home, "sub10"));
+
+        // 祖先 DENY + 更近层级 GRANT:显式拒绝全链优先
+        acl.setAcl(principal(alice), home.getId(), List.of(
+            new AclService.EntryDto("USER", bob.getId(), "-", true)));
+        acl.setAcl(principal(alice), sub.getId(), List.of(
+            new AclService.EntryDto("USER", bob.getId(), "r", true)));
+
+        assertThat(acl.hasPermission(principal(bob), sub.getId(), 'r')).isFalse();
     }
 }

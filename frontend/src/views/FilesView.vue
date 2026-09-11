@@ -15,7 +15,10 @@ const dragActive = ref(false)
 
 const currentParentId = computed(() => (crumbs.value.length ? crumbs.value[crumbs.value.length - 1].id : null))
 
-const { tasks, enqueue, retryTask, clearFinished } = useUploader(() => currentParentId.value, () => reload())
+const { tasks, enqueue, retryTask, cancelTask, clearFinished } = useUploader(
+  () => currentParentId.value,
+  () => reload(),
+)
 
 async function reload() {
   loading.value = true
@@ -198,6 +201,15 @@ onMounted(reload)
         <el-button v-if="task.status === 'error'" size="small" text type="primary" @click="retryTask(task.id)">
           重试
         </el-button>
+        <el-button
+          v-if="task.status === 'error' || task.status === 'uploading' || task.status === 'pending'"
+          size="small"
+          text
+          type="danger"
+          @click="cancelTask(task.id)"
+        >
+          取消
+        </el-button>
       </div>
     </div>
   </div>
@@ -206,6 +218,8 @@ onMounted(reload)
 <style scoped>
 .files {
   padding: 1rem;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .toolbar {
   display: flex;

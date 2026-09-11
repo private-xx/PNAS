@@ -1,6 +1,7 @@
 package com.pnas.server.files;
 
 import com.pnas.common.error.ErrorCode;
+import com.pnas.server.auth.SessionPrincipal;
 import com.pnas.server.blobstore.BlobStore;
 import com.pnas.server.blobstore.Sha256;
 import com.pnas.server.common.PnasProperties;
@@ -9,6 +10,7 @@ import com.pnas.server.files.domain.FileVersion;
 import com.pnas.server.files.domain.Node;
 import com.pnas.server.files.domain.UploadSession;
 import com.pnas.server.files.domain.VersionChunk;
+import com.pnas.server.iam.AclService;
 import com.pnas.server.iam.domain.User;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -34,16 +36,18 @@ public class UploadService {
     private final FileVersionRepository versions;
     private final VersionChunkRepository chunks;
     private final BlobStore blobs;
+    private final AclService acl;
     private final int chunkSize;
 
     public UploadService(UploadSessionRepository sessions, NodeRepository nodes,
                          FileVersionRepository versions, VersionChunkRepository chunks,
-                         BlobStore blobs, PnasProperties props) {
+                         BlobStore blobs, AclService acl, PnasProperties props) {
         this.sessions = sessions;
         this.nodes = nodes;
         this.versions = versions;
         this.chunks = chunks;
         this.blobs = blobs;
+        this.acl = acl;
         this.chunkSize = props.upload().chunkSize();
     }
 
@@ -82,6 +86,7 @@ public class UploadService {
     @Transactional
     public void acceptChunk(UUID actorId, UUID uploadId, int seq, InputStream body, String sha256) {
         UploadSession s = requireOpenFor(uploadId, actorId);
+        requireWriteOnDest(s);
         if (chunkCount(s) == 0) {
             throw new BusinessException(ErrorCode.CHUNK_INVALID, HttpStatus.BAD_REQUEST,
                 "空文件无需上传分块");
@@ -116,9 +121,16 @@ public class UploadService {
         }
         var user = s.getUser();
         Node dir = s.getDestParent();
+        requireWriteOnDest(s); // 权限可能在会话存续期间被回收(FR-AUTH-06):提交前再校验一次
+        Node existing = nodes.findByParentIdAndNameAndTrashedAtIsNull(dir.getId(), s.getFilename())
+            .orElse(null);
+        if (existing != null && existing.getKind() != Node.Kind.FILE) {
+            // 同名目录不能被当作文件写入(否则会给目录挂上 FileVersion,P2 评审 Critical#1)
+            throw new BusinessException(ErrorCode.NAME_CONFLICT, HttpStatus.CONFLICT,
+                "同名目录已存在,不能作为文件写入: " + s.getFilename());
+        }
         // 同目录同名文件 → 新增版本;否则创建 FILE 节点(版本化写入,FR-FS-04)
-        Node file = nodes.findByParentIdAndNameAndTrashedAtIsNull(dir.getId(), s.getFilename())
-            .orElseGet(() -> nodes.save(Node.file(user, dir, s.getFilename())));
+        Node file = existing != null ? existing : nodes.save(Node.file(user, dir, s.getFilename()));
         int nextVer = versions.findTopByNodeIdOrderByVersionNoDesc(file.getId())
             .map(v -> v.getVersionNo() + 1).orElse(1);
 
@@ -181,6 +193,16 @@ public class UploadService {
                 "上传会话不属于当前用户");
         }
         return s;
+    }
+
+    /** 提交前复检目标目录的写权限(以会话所属用户为主体)。 */
+    private void requireWriteOnDest(UploadSession s) {
+        User u = s.getUser();
+        var principal = new SessionPrincipal(u.getId(), u.getUsername(), u.getRole(), null);
+        if (!acl.hasPermission(principal, s.getDestParent().getId(), 'w')) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
+                "目标目录写权限已被回收,上传不能提交");
+        }
     }
 
     private int chunkCount(UploadSession s) {

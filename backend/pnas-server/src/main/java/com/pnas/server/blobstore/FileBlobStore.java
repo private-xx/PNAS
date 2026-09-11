@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -54,8 +55,18 @@ public class FileBlobStore implements BlobStore {
             Files.deleteIfExists(tmp);
             throw new IOException("chunk sha256 mismatch: expected " + sha + " got " + actual);
         }
+        if (total != size) {
+            // 长度必须与声明一致,否则重组出的文件会错位(FR-FS-02 校验)
+            Files.deleteIfExists(tmp);
+            throw new IOException("chunk size mismatch: expected " + size + " got " + total);
+        }
         Files.createDirectories(target.getParent());
-        Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
+        try {
+            Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (FileAlreadyExistsException e) {
+            // 并发写入相同哈希:目标已由另一次上传落盘,丢弃本次临时文件即为成功(去重语义)
+            Files.deleteIfExists(tmp);
+        }
     }
 
     @Override public InputStream open(String sha) throws IOException {

@@ -36,7 +36,16 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': { target: 'http://localhost:8080', changeOrigin: true },
-      '/events': { target: 'http://localhost:8080', changeOrigin: true },
+      '/events': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        // SSE:与开发态一致,不做缓冲
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('Connection', 'keep-alive')
+          })
+        },
+      },
     },
   },
 })
