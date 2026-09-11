@@ -1,0 +1,110 @@
+package com.pnas.server.iam;
+
+import com.pnas.server.AbstractIntegrationTest;
+import com.pnas.server.auth.SessionPrincipal;
+import com.pnas.server.common.error.BusinessException;
+import com.pnas.server.files.FilesService;
+import com.pnas.server.files.NodeRepository;
+import com.pnas.server.files.domain.Node;
+import com.pnas.server.iam.domain.Group;
+import com.pnas.server.iam.domain.User;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/** ACL 判定矩阵(FR-AUTH-06):默认拒绝 / owner 全权 / 继承 / 显式拒绝优先 / 组授权 / 管理权限。 */
+@Transactional
+class AclDecisionTest extends AbstractIntegrationTest {
+
+    @Autowired AclService acl;
+    @Autowired FilesService files;
+    @Autowired UserRepository users;
+    @Autowired GroupRepository groups;
+    @Autowired NodeRepository nodes;
+    @Autowired PasswordEncoder encoder;
+
+    private User user(String name) {
+        return users.save(User.create(name, name, encoder.encode("secret123"), User.Role.MEMBER));
+    }
+
+    private SessionPrincipal principal(User u) {
+        return new SessionPrincipal(u.getId(), u.getUsername(), u.getRole(), UUID.randomUUID());
+    }
+
+    @Test
+    void defaultDenyAndOwnerFullAccess() {
+        var alice = user("acl-alice");
+        var bob = user("acl-bob");
+        Node home = files.ensureUserHome(alice);
+
+        assertThat(acl.hasPermission(principal(alice), home.getId(), 'r')).isTrue();  // owner 全权
+        assertThat(acl.hasPermission(principal(bob), home.getId(), 'r')).isFalse();  // 默认拒绝
+    }
+
+    @Test
+    void grantOnParentInheritsToChild() {
+        var alice = user("acl-alice2");
+        var bob = user("acl-bob2");
+        Node home = files.ensureUserHome(alice);
+        Node sub = nodes.save(Node.dir(alice, home, "sub"));
+
+        acl.setAcl(principal(alice), home.getId(), List.of(
+            new AclService.EntryDto("USER", bob.getId(), "r", true)));
+
+        assertThat(acl.hasPermission(principal(bob), sub.getId(), 'r')).isTrue();
+        assertThat(acl.hasPermission(principal(bob), sub.getId(), 'w')).isFalse();
+    }
+
+    @Test
+    void explicitDenyOnChildOverridesParentGrant() {
+        var alice = user("acl-alice3");
+        var bob = user("acl-bob3");
+        Node home = files.ensureUserHome(alice);
+        Node privateDir = nodes.save(Node.dir(alice, home, "private"));
+        Node openDir = nodes.save(Node.dir(alice, home, "open"));
+
+        acl.setAcl(principal(alice), home.getId(), List.of(
+            new AclService.EntryDto("USER", bob.getId(), "rw", true)));
+        acl.setAcl(principal(alice), privateDir.getId(), List.of(
+            new AclService.EntryDto("USER", bob.getId(), "-", true)));
+
+        assertThat(acl.hasPermission(principal(bob), openDir.getId(), 'r')).isTrue();
+        assertThat(acl.hasPermission(principal(bob), privateDir.getId(), 'r')).isFalse(); // 拒绝优先
+    }
+
+    @Test
+    void groupGrantAppliesToMembersOnly() {
+        var alice = user("acl-alice4");
+        var bob = user("acl-bob4");
+        var carol = user("acl-carol4");
+        var fam = Group.create("acl-fam4");
+        fam.getUsers().add(bob);
+        fam = groups.save(fam);
+
+        Node home = files.ensureUserHome(alice);
+        acl.setAcl(principal(alice), home.getId(), List.of(
+            new AclService.EntryDto("GROUP", fam.getId(), "rw", true)));
+
+        assertThat(acl.hasPermission(principal(bob), home.getId(), 'w')).isTrue();
+        assertThat(acl.hasPermission(principal(carol), home.getId(), 'w')).isFalse();
+    }
+
+    @Test
+    void nonOwnerCannotManageAcl() {
+        var alice = user("acl-alice5");
+        var bob = user("acl-bob5");
+        Node home = files.ensureUserHome(alice);
+
+        assertThatThrownBy(() -> acl.setAcl(principal(bob), home.getId(), List.of()))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("无权管理");
+        assertThat(acl.canManage(principal(alice), home.getId())).isTrue();
+    }
+}
