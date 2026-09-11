@@ -43,3 +43,7 @@ agent/build/
 
 # --- Superpowers SDD 工作区 ---
 .superpowers/
+
+# tsc 产物(项目引用会为 vite.config.ts 生成)
+frontend/vite.config.js
+frontend/*.tsbuildinfo
