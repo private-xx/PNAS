@@ -74,14 +74,14 @@ public class Job {
         this.finishedAt = now;
     }
 
-    /** 未达最大尝试次数 → 回到 QUEUED 并设置退避时间;否则入 DEAD。 */
+    /** 未达最大尝试次数 → 进入 FAILED 并设置退避时间(调度器会再次领取);否则入 DEAD。 */
     public void markFailed(String error, Instant now, Instant retryAt) {
         this.error = error;
         if (this.attempt >= this.maxAttempts) {
             this.state = DEAD;
             this.finishedAt = now;
         } else {
-            this.state = QUEUED;
+            this.state = FAILED;
             this.nextRunAt = retryAt;
         }
     }

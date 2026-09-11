@@ -45,14 +45,25 @@ public class AuthController {
             .maxAge(30 * 24 * 3600)
             .build();
         res.addHeader(HttpHeaders.SET_COOKIE, c.toString());
+        // 双提交 Cookie:供 SPA 在刷新后重新取得 CSRF(非 HttpOnly,同源脚本可读)
+        ResponseCookie csrfCookie = ResponseCookie.from("PNAS_CSRF", parts[1])
+            .httpOnly(false)
+            .secure(props.security().requireTls())
+            .sameSite("Lax")
+            .path("/")
+            .maxAge(30 * 24 * 3600)
+            .build();
+        res.addHeader(HttpHeaders.SET_COOKIE, csrfCookie.toString());
         res.setHeader("X-CSRF-Token", parts[1]);
         return Map.of("status", "ok");
     }
 
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void logout(@AuthenticationPrincipal SessionPrincipal me) {
+    public void logout(@AuthenticationPrincipal SessionPrincipal me, HttpServletResponse res) {
         auth.logout(me.sessionId());
+        res.addHeader(HttpHeaders.SET_COOKIE, ResponseCookie.from("PNAS_CSRF", "")
+            .httpOnly(false).sameSite("Lax").path("/").maxAge(0).build().toString());
     }
 
     @GetMapping("/session")

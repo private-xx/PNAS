@@ -14,6 +14,23 @@ export interface UploadTask {
 
 const PROGRESS_KEY = 'pnas-upload-progress'
 const CONCURRENCY = 3
+const CHUNK_RETRIES = 3
+
+async function putChunkWithRetry(uploadId: string, seq: number, blob: Blob): Promise<void> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= CHUNK_RETRIES; attempt++) {
+    try {
+      await uploadsApi.putChunk(uploadId, seq, blob)
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < CHUNK_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * attempt))
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('分块上传失败')
+}
 
 /** 记录 每会话已成功的分块序号,用于刷新/网络中断后的断点续传。 */
 function loadProgress(): Record<string, number[]> {
@@ -49,7 +66,7 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
       if (!sent.has(seq)) {
         const start = seq * uploadsApi.CHUNK_SIZE
         const blob = task.file.slice(start, Math.min(task.file.size, start + uploadsApi.CHUNK_SIZE))
-        await uploadsApi.putChunk(uploadId, seq, blob)
+        await putChunkWithRetry(uploadId, seq, blob)
         sent.add(seq)
         progressMap[uploadId] = Array.from(sent)
         saveProgress(progressMap)
@@ -94,5 +111,21 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
     await drain()
   }
 
-  return { tasks, enqueue }
+  /** 重试失败的任务(复用同一 task 与已记录的分块进度)。 */
+  async function retryTask(id: string): Promise<void> {
+    const task = tasks.value.find((t) => t.id === id)
+    if (!task || task.status !== 'error') {
+      return
+    }
+    task.status = 'pending'
+    task.message = undefined
+    await drain()
+  }
+
+  /** 清理已完成的任务(避免队列无限增长)。 */
+  function clearFinished(): void {
+    tasks.value = tasks.value.filter((t) => t.status !== 'done')
+  }
+
+  return { tasks, enqueue, retryTask, clearFinished }
 }

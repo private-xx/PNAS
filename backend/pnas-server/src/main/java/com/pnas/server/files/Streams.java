@@ -44,6 +44,23 @@ public final class Streams {
             }
 
             @Override
+            public long skip(long n) throws IOException {
+                long remaining = n;
+                while (remaining > 0) {
+                    long skipped = current.skip(remaining);
+                    if (skipped > 0) {
+                        remaining -= skipped;
+                        continue;
+                    }
+                    if (!it.hasNext()) {
+                        break;
+                    }
+                    current = it.next();
+                }
+                return n - remaining;
+            }
+
+            @Override
             public void close() throws IOException {
                 for (InputStream s : parts) {
                     s.close();

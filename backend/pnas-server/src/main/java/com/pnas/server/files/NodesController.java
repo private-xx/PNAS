@@ -72,22 +72,35 @@ public class NodesController {
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String range) {
 
         long total = files.sizeOf(me, id);
+        boolean ranged = range != null && !range.isBlank();
         long start = 0;
         Long end = null;
-        if (range != null && range.startsWith("bytes=")) {
+        if (ranged) {
+            if (!range.startsWith("bytes=")) {
+                throw badRange("仅支持 bytes 单位: " + range);
+            }
             String spec = range.substring("bytes=".length()).trim();
             String[] parts = spec.split("-", 2);
-            if (!parts[0].isEmpty()) {
-                start = Long.parseLong(parts[0].trim());
+            try {
+                if (parts[0].isEmpty()) {
+                    // 后缀范围 bytes=-N:最后 N 字节
+                    long suffix = Long.parseLong(parts.length > 1 ? parts[1].trim() : "");
+                    start = Math.max(0, total - suffix);
+                    end = total - 1;
+                } else {
+                    start = Long.parseLong(parts[0].trim());
+                    if (parts.length > 1 && !parts[1].isEmpty()) {
+                        end = Long.parseLong(parts[1].trim());
+                    }
+                }
+            } catch (NumberFormatException e) {
+                throw badRange("Range 数值无法解析: " + range);
             }
-            if (parts.length > 1 && !parts[1].isEmpty()) {
-                end = Long.parseLong(parts[1].trim());
+            if (start < 0 || start >= total || (end != null && end < start)) {
+                throw new com.pnas.server.common.error.BusinessException(
+                    com.pnas.common.error.ErrorCode.BAD_REQUEST,
+                    HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Range 越界: " + range);
             }
-        }
-        if (start < 0 || start >= total) {
-            throw new com.pnas.server.common.error.BusinessException(
-                com.pnas.common.error.ErrorCode.BAD_REQUEST,
-                HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "Range 起点越界: " + start);
         }
         long length = total - start;
         if (end != null) {
@@ -95,11 +108,11 @@ public class NodesController {
         }
 
         var cs = files.content(me, id, start, length);
-        var builder = ResponseEntity.status(range == null ? HttpStatus.OK : HttpStatus.PARTIAL_CONTENT)
+        var builder = ResponseEntity.status(ranged ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
             .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(cs.length()))
             .header(HttpHeaders.ACCEPT_RANGES, "bytes")
             .contentType(MediaType.APPLICATION_OCTET_STREAM);
-        if (range != null) {
+        if (ranged) {
             builder.header(HttpHeaders.CONTENT_RANGE,
                 "bytes " + start + "-" + (start + cs.length() - 1) + "/" + total);
         }
@@ -109,5 +122,10 @@ public class NodesController {
             }
         };
         return builder.body(body);
+    }
+
+    private com.pnas.server.common.error.BusinessException badRange(String message) {
+        return new com.pnas.server.common.error.BusinessException(
+            com.pnas.common.error.ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, message);
     }
 }

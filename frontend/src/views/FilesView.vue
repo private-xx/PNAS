@@ -15,7 +15,7 @@ const dragActive = ref(false)
 
 const currentParentId = computed(() => (crumbs.value.length ? crumbs.value[crumbs.value.length - 1].id : null))
 
-const { tasks, enqueue } = useUploader(() => currentParentId.value, () => reload())
+const { tasks, enqueue, retryTask, clearFinished } = useUploader(() => currentParentId.value, () => reload())
 
 async function reload() {
   loading.value = true
@@ -67,7 +67,7 @@ async function rename(node: nodesApi.NodeDto) {
     await nodesApi.renameNode(node.id, value.trim())
     await reload()
   } catch (error) {
-    if (error !== 'cancel') {
+    if (error !== 'cancel' && error !== 'close') {
       ElMessage.error(errorMessage(error, '重命名失败'))
     }
   }
@@ -79,7 +79,7 @@ async function removeNode(node: nodesApi.NodeDto) {
     await nodesApi.trashNode(node.id)
     await reload()
   } catch (error) {
-    if (error !== 'cancel') {
+    if (error !== 'cancel' && error !== 'close') {
       ElMessage.error(errorMessage(error, '删除失败'))
     }
   }
@@ -185,11 +185,19 @@ onMounted(reload)
     </el-table>
 
     <div v-if="tasks.length" class="uploads">
-      <div class="uploads-title">上传队列</div>
+      <div class="uploads-title">
+        上传队列
+        <el-button size="small" text @click="clearFinished">清理已完成</el-button>
+      </div>
       <div v-for="task in tasks" :key="task.id" class="upload-item">
         <span class="name">{{ task.file.name }}</span>
         <el-progress :percentage="task.progress" :status="task.status === 'error' ? 'exception' : undefined" />
-        <span class="status">{{ task.status === 'done' ? '完成' : task.status === 'error' ? task.message : task.status }}</span>
+        <span class="status">
+          {{ task.status === 'done' ? '完成' : task.status === 'error' ? task.message : task.status }}
+        </span>
+        <el-button v-if="task.status === 'error'" size="small" text type="primary" @click="retryTask(task.id)">
+          重试
+        </el-button>
       </div>
     </div>
   </div>

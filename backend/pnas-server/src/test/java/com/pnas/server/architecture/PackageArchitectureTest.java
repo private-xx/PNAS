@@ -35,12 +35,17 @@ class PackageArchitectureTest {
     static final ArchRule domain_packages_do_not_depend_on_web = noClasses()
         .that().resideInAnyPackage(
             "com.pnas.server.files..", "com.pnas.server.blobstore..", "com.pnas.server.job..",
-            "com.pnas.server.iam..", "com.pnas.server.common..")
-        .should().dependOnClassesThat().resideInAPackage(WEB);
+            "com.pnas.server.iam..", "com.pnas.server.common..", "com.pnas.server.auth..")
+        .should().dependOnClassesThat().resideInAPackage(WEB)
+        .because("web 是接入层;领域/服务包不得反向依赖(见架构 §4)");
 
     @ArchTest
     static final ArchRule storage_and_common_do_not_depend_on_controllers = noClasses()
         .that().resideInAnyPackage("com.pnas.server.blobstore..", "com.pnas.server.common..")
-        .should().dependOnClassesThat().resideInAPackage("com.pnas.server..")
-        .andShould().dependOnClassesThat().haveSimpleNameEndingWith("Controller");
+        .should().dependOnClassesThat(
+            com.tngtech.archunit.core.domain.JavaClass.Predicates
+                .resideInAPackage("com.pnas.server..")
+                .and(com.tngtech.archunit.core.domain.JavaClass.Predicates
+                    .simpleNameEndingWith("Controller")))
+        .because("存储/通用包不得依赖本项目的 Controller");
 }

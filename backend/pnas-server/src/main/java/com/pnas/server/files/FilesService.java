@@ -74,7 +74,7 @@ public class FilesService {
     @Transactional
     public List<NodeDto> list(SessionPrincipal me, UUID parentId) {
         Node parent = parentId == null ? homeOf(me) : requireNode(parentId);
-        require(parent, me, 'r');
+        requireReadPath(parent, me);
         return nodes.findByParentIdAndTrashedAtIsNullOrderByNameAsc(parent.getId())
             .stream().map(this::toDto).toList();
     }
@@ -182,9 +182,14 @@ public class FilesService {
         int chunkSize = all.isEmpty() ? 1 : (int) all.get(0).getSizeBytes();
         int firstSeq = chunkSize <= 0 ? 0 : (int) (start / chunkSize);
         long skipInFirst = chunkSize <= 0 ? 0 : start % chunkSize;
+        // 只打开区间覆盖到的分块(避免大文件 Range 请求打开全部块,读完放大与 FD 耗尽)
+        int lastSeq = firstSeq;
+        if (len > 0 && chunkSize > 0) {
+            lastSeq = (int) ((start + len - 1) / chunkSize);
+        }
 
         List<InputStream> parts = new ArrayList<>();
-        for (int i = firstSeq; i < all.size(); i++) {
+        for (int i = firstSeq; i <= lastSeq && i < all.size(); i++) {
             VersionChunk c = all.get(i);
             try {
                 parts.add(blobs.open(c.getBlobHash()));
@@ -253,6 +258,15 @@ public class FilesService {
         if (!acl.hasPermission(me, node.getId(), perm)) {
             throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
                 "无权限(" + perm + ")访问: " + node.getName());
+        }
+    }
+
+    /** 目录级操作要求**沿途每一级**都有 R(架构 §6.2 第 4 条)。 */
+    private void requireReadPath(Node node, SessionPrincipal me) {
+        Node current = node;
+        while (current != null) {
+            require(current, me, 'r');
+            current = current.getParent();
         }
     }
 

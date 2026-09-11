@@ -3,6 +3,8 @@ package com.pnas.server.job;
 import com.pnas.common.error.ErrorCode;
 import com.pnas.server.common.error.BusinessException;
 import com.pnas.server.job.domain.Job;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +24,7 @@ import java.util.UUID;
 public class JobService {
 
     private static final int BACKOFF_SECONDS = 30;
+    private static final Logger log = LoggerFactory.getLogger(JobService.class);
 
     private final JobRepository jobs;
     private final Map<String, JobHandler> handlers = new LinkedHashMap<>();
@@ -35,6 +38,12 @@ public class JobService {
 
     @Transactional
     public UUID enqueue(String type, Map<String, Object> payload) {
+        return enqueue(type, payload, 0, 0);
+    }
+
+    /** 入队(可指定优先级与延迟执行秒数;优先级越大越先执行)。 */
+    @Transactional
+    public UUID enqueue(String type, Map<String, Object> payload, int priority, long delaySeconds) {
         if (!handlers.containsKey(type)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST,
                 "未注册的任务类型: " + type);
@@ -42,13 +51,15 @@ public class JobService {
         var job = new Job();
         job.setType(type);
         job.setPayload(payload == null ? Map.of() : payload);
+        job.setPriority(priority);
+        job.setNextRunAt(Instant.now().plusSeconds(Math.max(0, delaySeconds)));
         return jobs.save(job).getId();
     }
 
-    @Transactional
+    /** 执行一批到期任务(QUEUED 首发 + FAILED 重试);由调度器或测试钩子调用。 */
     public int runDue() {
-        List<Job> due = jobs.findTop20ByStateAndNextRunAtLessThanEqualOrderByPriorityDescNextRunAtAsc(
-            Job.QUEUED, Instant.now());
+        List<Job> due = jobs.findTop20ByStateInAndNextRunAtLessThanEqualOrderByPriorityDescNextRunAtAsc(
+            List.of(Job.QUEUED, Job.FAILED), Instant.now());
         int executed = 0;
         for (Job job : due) {
             execute(job);
@@ -74,6 +85,10 @@ public class JobService {
     @Transactional
     public void retry(UUID id) {
         Job job = require(id);
+        if (!Job.DEAD.equals(job.getState()) && !Job.FAILED.equals(job.getState())) {
+            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT,
+                "只有 FAILED/DEAD 任务可以重试,当前状态: " + job.getState());
+        }
         job.setState(Job.QUEUED);
         job.setAttempt(0);
         job.setError(null);
@@ -115,6 +130,8 @@ public class JobService {
             job.markSuccess(result, Instant.now());
         } catch (Exception e) {
             String message = e.getClass().getSimpleName() + ": " + e.getMessage();
+            log.warn("任务失败 id={} type={} attempt={}/{}: {}", job.getId(), job.getType(),
+                job.getAttempt(), job.getMaxAttempts(), message, e);
             job.markFailed(message, Instant.now(),
                 Instant.now().plusSeconds((long) BACKOFF_SECONDS * Math.max(1, job.getAttempt())));
         }
