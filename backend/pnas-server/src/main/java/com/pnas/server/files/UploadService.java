@@ -73,8 +73,8 @@ public class UploadService {
     }
 
     @Transactional
-    public void acceptChunk(UUID uploadId, int seq, InputStream body, String sha256) {
-        UploadSession s = requireOpen(uploadId);
+    public void acceptChunk(UUID actorId, UUID uploadId, int seq, InputStream body, String sha256) {
+        UploadSession s = requireOpenFor(uploadId, actorId);
         long expected = expectedChunkSize(s, seq);
         try {
             blobs.store(body, expected, sha256);
@@ -90,8 +90,8 @@ public class UploadService {
     }
 
     @Transactional
-    public Completed complete(UUID uploadId) {
-        UploadSession s = requireOpen(uploadId);
+    public Completed complete(UUID actorId, UUID uploadId) {
+        UploadSession s = requireOpenFor(uploadId, actorId);
         int count = chunkCount(s);
         if (s.getReceivedChunks().size() != count) {
             throw new BusinessException(ErrorCode.CHUNK_MISSING, HttpStatus.BAD_REQUEST,
@@ -143,10 +143,8 @@ public class UploadService {
     }
 
     @Transactional
-    public void cancel(UUID uploadId) {
-        UploadSession s = sessions.findById(uploadId)
-            .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
-                HttpStatus.BAD_REQUEST, "上传会话不存在"));
+    public void cancel(UUID actorId, UUID uploadId) {
+        UploadSession s = requireOpenFor(uploadId, actorId);
         s.setState("CANCELLED");
     }
 
@@ -157,6 +155,16 @@ public class UploadService {
         if (!"OPEN".equals(s.getState())) {
             throw new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
                 HttpStatus.BAD_REQUEST, "上传会话不在 OPEN 状态");
+        }
+        return s;
+    }
+
+    /** 会话必须是 OPEN 且属于该主体(操作上传的其他端点用)。 */
+    private UploadSession requireOpenFor(UUID uploadId, UUID actorId) {
+        UploadSession s = requireOpen(uploadId);
+        if (!s.getUser().getId().equals(actorId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
+                "上传会话不属于当前用户");
         }
         return s;
     }

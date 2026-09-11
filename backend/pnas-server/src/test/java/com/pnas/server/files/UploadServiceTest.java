@@ -33,9 +33,9 @@ class UploadServiceTest extends AbstractIntegrationTest {
         var up = uploads.start(admin, home.getId(), "report.txt", a.length + b.length);
         String shaA = Sha256.hex(a);
         String shaB = Sha256.hex(b);
-        uploads.acceptChunk(up, 0, new ByteArrayInputStream(a), shaA);
-        uploads.acceptChunk(up, 1, new ByteArrayInputStream(b), shaB);
-        var done = uploads.complete(up);
+        uploads.acceptChunk(admin.getId(), up, 0, new ByteArrayInputStream(a), shaA);
+        uploads.acceptChunk(admin.getId(), up, 1, new ByteArrayInputStream(b), shaB);
+        var done = uploads.complete(admin.getId(), up);
 
         assertThat(done.nodeId()).isNotNull();
         assertThat(done.versionNo()).isEqualTo(1);
