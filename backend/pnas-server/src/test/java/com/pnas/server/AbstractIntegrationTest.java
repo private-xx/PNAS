@@ -33,5 +33,7 @@ public abstract class AbstractIntegrationTest {
         r.add("pnas.security.require-tls", () -> "false");
         r.add("pnas.bootstrap.admin-username", () -> "admin");
         r.add("pnas.bootstrap.admin-password", () -> "admin-secret");
+        // 测试中关闭周期调度,任务由测试显式同步执行,避免并发干扰断言
+        r.add("pnas.jobs.scheduler-enabled", () -> "false");
     }
 }
