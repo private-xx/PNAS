@@ -107,7 +107,21 @@ public class UploadService {
 
     @Transactional
     public Completed complete(UUID actorId, UUID uploadId) {
-        UploadSession s = requireOpenFor(uploadId, actorId);
+        UploadSession s = requireOwned(uploadId, actorId);
+        if ("COMPLETE".equals(s.getState())) {
+            // 幂等:客户端在"服务端已完成但响应丢失"后重试/探测时,返回既有结果,避免重复上传或重复建版本
+            Node file = nodes.findByParentIdAndNameAndTrashedAtIsNull(
+                    s.getDestParent().getId(), s.getFilename())
+                .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
+                    HttpStatus.BAD_REQUEST, "会话已完成但目标文件不存在"));
+            int existingVer = versions.findTopByNodeIdOrderByVersionNoDesc(file.getId())
+                .map(FileVersion::getVersionNo).orElse(0);
+            return new Completed(file.getId(), existingVer, s.getTotalSize(), true);
+        }
+        if (!"OPEN".equals(s.getState())) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID, HttpStatus.BAD_REQUEST,
+                "上传会话不在 OPEN 状态");
+        }
         int count = chunkCount(s);
         if (s.getReceivedChunks().size() != count) {
             throw new BusinessException(ErrorCode.CHUNK_MISSING, HttpStatus.BAD_REQUEST,
@@ -174,23 +188,24 @@ public class UploadService {
         s.setState("CANCELLED");
     }
 
-    private UploadSession requireOpen(UUID uploadId) {
+    /** 会话必须属于该主体(不限状态,供 complete 的幂等探测使用)。 */
+    private UploadSession requireOwned(UUID uploadId, UUID actorId) {
         UploadSession s = sessions.findById(uploadId)
             .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
                 HttpStatus.BAD_REQUEST, "上传会话不存在"));
-        if (!"OPEN".equals(s.getState())) {
-            throw new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
-                HttpStatus.BAD_REQUEST, "上传会话不在 OPEN 状态");
+        if (!s.getUser().getId().equals(actorId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
+                "上传会话不属于当前用户");
         }
         return s;
     }
 
     /** 会话必须是 OPEN 且属于该主体(操作上传的其他端点用)。 */
     private UploadSession requireOpenFor(UUID uploadId, UUID actorId) {
-        UploadSession s = requireOpen(uploadId);
-        if (!s.getUser().getId().equals(actorId)) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
-                "上传会话不属于当前用户");
+        UploadSession s = requireOwned(uploadId, actorId);
+        if (!"OPEN".equals(s.getState())) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
+                HttpStatus.BAD_REQUEST, "上传会话不在 OPEN 状态");
         }
         return s;
     }

@@ -27,4 +27,9 @@ public class Group {
         g.name = name;
         return g;
     }
+
+    /** 重命名(校验与冲突判定由服务层负责)。 */
+    public void rename(String name) {
+        this.name = name;
+    }
 }

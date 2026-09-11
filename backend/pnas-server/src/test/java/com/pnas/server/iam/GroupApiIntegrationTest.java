@@ -2,6 +2,7 @@ package com.pnas.server.iam;
 
 import com.jayway.jsonpath.JsonPath;
 import com.pnas.server.AbstractIntegrationTest;
+import com.pnas.server.files.FilesService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -19,6 +20,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class GroupApiIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired MockMvc mvc;
+    @Autowired UserRepository users;
+    @Autowired FilesService files;
+    @Autowired AclService acl;
 
     private record Auth(String cookie, String csrf) {}
 
@@ -73,6 +77,44 @@ class GroupApiIntegrationTest extends AbstractIntegrationTest {
                 .header("Cookie", admin.cookie()).header("X-CSRF", admin.csrf()))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.members").isEmpty());
+    }
+
+    @Test
+    void renameAndDeleteGroupAlsoCleansAclEntries() throws Exception {
+        var admin = login("admin", "admin-secret");
+        var adminUser = users.findByUsername("admin").orElseThrow();
+        var home = files.ensureUserHome(adminUser);
+
+        String groupName = "待删组-" + UUID.randomUUID().toString().substring(0, 6);
+        String created = mvc.perform(post("/api/v1/groups")
+                .header("Cookie", admin.cookie()).header("X-CSRF", admin.csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"" + groupName + "\"}"))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        UUID groupId = UUID.fromString(JsonPath.read(created, "$.id"));
+
+        // 给该组一条 ACL 授权,验证删除组时不会留下悬挂授权
+        var principal = new com.pnas.server.auth.SessionPrincipal(
+            adminUser.getId(), adminUser.getUsername(), adminUser.getRole(), UUID.randomUUID());
+        acl.setAcl(principal, home.getId(), java.util.List.of(
+            new com.pnas.server.iam.AclService.EntryDto("GROUP", groupId, "r", true)));
+        assertThat(acl.listAcl(principal, home.getId())).hasSize(1);
+
+        // 重命名
+        String renamed = "已改名-" + UUID.randomUUID().toString().substring(0, 6);
+        mvc.perform(patch("/api/v1/groups/{id}", groupId)
+                .header("Cookie", admin.cookie()).header("X-CSRF", admin.csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"" + renamed + "\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.name").value(renamed));
+
+        // 删除 → ACL 条目一并清理
+        mvc.perform(delete("/api/v1/groups/{id}", groupId)
+                .header("Cookie", admin.cookie()).header("X-CSRF", admin.csrf()))
+            .andExpect(status().isNoContent());
+        assertThat(acl.listAcl(principal, home.getId())).isEmpty();
     }
 
     @Test

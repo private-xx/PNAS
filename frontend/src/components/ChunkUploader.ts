@@ -10,7 +10,9 @@ export interface UploadTask {
   file: File
   progress: number
   status: UploadStatus
-  /** 目标目录 + 文件元信息,用于续传记录与并发去重 */
+  /** 目标目录(入队时冻结,避免切换到别的目录后写错位置) */
+  parentId: string
+  /** 目标目录 + 文件元信息:续传记录键与并发去重键 */
   fingerprint: string
   uploadId?: string
   message?: string
@@ -25,12 +27,8 @@ interface ResumeEntry {
   sent: number[]
 }
 
-/**
- * 指纹必须包含目标目录:否则同一文件上传到另一个目录时会复用上一个目录的上传会话,
- * 导致文件被静默写入旧目录(WEB 复评 A)。
- */
-function fingerprint(file: File, destParentId: string): string {
-  return `${destParentId}:${file.name}:${file.size}:${file.lastModified}`
+function fingerprint(file: File, parentId: string): string {
+  return `${parentId}:${file.name}:${file.size}:${file.lastModified}`
 }
 
 function loadResume(): Record<string, ResumeEntry> {
@@ -45,15 +43,21 @@ function saveResume(map: Record<string, ResumeEntry>): void {
   localStorage.setItem(RESUME_KEY, JSON.stringify(map))
 }
 
+function dropResume(fp: string): void {
+  const map = loadResume()
+  delete map[fp]
+  saveResume(map)
+}
+
 /** 经函数边界读取状态,避免 TS 把 status 收窄成字面量后误判"不可能相等"。 */
 function isCancelled(task: UploadTask): boolean {
   return task.status === 'cancelled'
 }
 
-/** 会话已失效(被取消/已完成/服务端不存在)时,应丢弃续传记录并用新会话重来一次。 */
+/** 会话语义已终结(不存在/已取消/非 OPEN):400/404/410。**不含 409** —— 409 是并发冲突,应报错而非静默重传。 */
 function isStaleSession(error: unknown): boolean {
   const status = (error as { response?: { status?: number } })?.response?.status
-  return status === 400 || status === 404 || status === 409 || status === 410
+  return status === 400 || status === 404 || status === 410
 }
 
 async function putChunkWithRetry(uploadId: string, seq: number, blob: Blob): Promise<void> {
@@ -64,7 +68,7 @@ async function putChunkWithRetry(uploadId: string, seq: number, blob: Blob): Pro
       return
     } catch (error) {
       if (isStaleSession(error)) {
-        throw error // 会话失效无需重试,交给上层重建
+        throw error // 会话失效无需重试,交给上层处理
       }
       lastError = error
       if (attempt < CHUNK_RETRIES) {
@@ -76,21 +80,29 @@ async function putChunkWithRetry(uploadId: string, seq: number, blob: Blob): Pro
 }
 
 /**
- * 分块上传器:并发 3、逐块 SHA-256、失败重试;
- * 以"目标目录 + 文件指纹"持久化 uploadId 与已传块号,**刷新/中断后可续**;
- * 支持取消(在飞上传会在下一个分块边界停止)。
+ * 分块上传器:并发 3、逐块 SHA-256、失败重试;以"目标目录 + 文件指纹"持久化进度,**刷新/中断后可续**;
+ * 取消会在下一个分块边界停止且**不会被任何恢复路径复活**。
  */
 export function useUploader(destParentId: () => string | null, onCompleted: () => void) {
   const tasks: Ref<UploadTask[]> = ref([])
 
+  function finishTask(task: UploadTask): void {
+    dropResume(task.fingerprint)
+    task.progress = 100
+    task.status = 'done'
+  }
+
   async function uploadOne(task: UploadTask, allowSessionReset = true): Promise<void> {
-    const parentId = destParentId()
+    if (isCancelled(task)) {
+      return
+    }
+    const parentId = task.parentId
     if (!parentId) {
       throw new Error('未选择目标目录')
     }
     task.status = 'uploading'
-    const fp = task.fingerprint
 
+    const fp = task.fingerprint
     const resume = loadResume()
     let uploadId = task.uploadId ?? resume[fp]?.uploadId
     let sent = new Set<number>(resume[fp]?.sent ?? [])
@@ -106,7 +118,7 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
     try {
       for (let seq = 0; seq < total; seq++) {
         if (isCancelled(task)) {
-          return // 用户已取消:停止后续分块,不再提交
+          return
         }
         if (!sent.has(seq)) {
           const start = seq * uploadsApi.CHUNK_SIZE
@@ -124,22 +136,26 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
       }
       await uploadsApi.completeUpload(uploadId)
     } catch (error) {
+      if (isCancelled(task)) {
+        return // 取消导致的失败不得触发任何恢复逻辑
+      }
       if (allowSessionReset && isStaleSession(error)) {
-        // 会话失效:清除记录并立即用新会话重试一次(B)
-        const map = loadResume()
-        delete map[fp]
-        saveResume(map)
-        task.uploadId = undefined
-        return uploadOne(task, false)
+        // 先探测:服务端可能已完成(崩溃/响应丢失),complete 幂等返回既有结果
+        try {
+          await uploadsApi.completeUpload(uploadId)
+          finishTask(task)
+          onCompleted()
+          return
+        } catch {
+          dropResume(fp)
+          task.uploadId = undefined
+          return uploadOne(task, false) // 确已失效:仅重建一次
+        }
       }
       throw error
     }
 
-    const done = loadResume()
-    delete done[fp]
-    saveResume(done)
-    task.progress = 100
-    task.status = 'done'
+    finishTask(task)
     onCompleted()
   }
 
@@ -151,7 +167,7 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
         try {
           await uploadOne(next)
         } catch (error) {
-          if (next.status !== 'cancelled') {
+          if (!isCancelled(next)) {
             next.status = 'error'
             next.message = errorMessage(error, '上传失败')
           }
@@ -163,21 +179,26 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
   }
 
   async function enqueue(files: FileList | File[]): Promise<void> {
-    const parentId = destParentId() ?? ''
+    const parentId = destParentId()
+    if (!parentId) {
+      return
+    }
     for (const file of Array.from(files)) {
       const fp = fingerprint(file, parentId)
-      // 同一目标目录的同一文件已在队列中时不重复入队(避免双任务共用会话 → 双 complete,C)
       const active = tasks.value.some(
-        (t) => t.fingerprint === fp && (t.status === 'pending' || t.status === 'uploading'),
+        (t) =>
+          t.fingerprint === fp &&
+          (t.status === 'pending' || t.status === 'uploading' || t.status === 'error'),
       )
       if (active) {
-        continue
+        continue // 同一目标目录的同一文件已在队列(含待重试)时不重复入队
       }
       tasks.value.push({
         id: uuid(),
         file,
         progress: 0,
         status: 'pending',
+        parentId,
         fingerprint: fp,
       })
     }
@@ -195,7 +216,7 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
     await drain()
   }
 
-  /** 取消上传:通知服务端作废会话,清理本地续传记录;在飞上传会在下一分块边界停止(D)。 */
+  /** 取消上传:先置取消态(在飞上传会在下一分块边界停止且不被复活),再作废服务端会话。 */
   async function cancelTask(id: string): Promise<void> {
     const task = tasks.value.find((t) => t.id === id)
     if (!task || task.status === 'done') {
@@ -210,9 +231,7 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
         /* 会话可能已完成/已失效,忽略 */
       }
     }
-    const map = loadResume()
-    delete map[task.fingerprint]
-    saveResume(map)
+    dropResume(task.fingerprint)
   }
 
   /** 清理已结束的任务(避免队列无限增长)。 */

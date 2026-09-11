@@ -118,6 +118,24 @@ class UploadServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void completeIsIdempotentOnAlreadyCompletedSession() {
+        var admin = admin();
+        var home = files.ensureUserHome(admin);
+        byte[] content = ("idem-" + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8);
+        String name = "idem-" + UUID.randomUUID() + ".txt";
+
+        UUID uploadId = uploads.start(admin, home.getId(), name, content.length);
+        uploads.acceptChunk(admin.getId(), uploadId, 0, new ByteArrayInputStream(content),
+            Sha256.hex(content));
+        var first = uploads.complete(admin.getId(), uploadId);
+        // 崩溃后重试/探测:不得新建版本,返回既有结果
+        var second = uploads.complete(admin.getId(), uploadId);
+
+        assertThat(second.nodeId()).isEqualTo(first.nodeId());
+        assertThat(second.versionNo()).isEqualTo(first.versionNo());
+    }
+
+    @Test
     void negativeSizeIsRejected() {
         var admin = admin();
         var home = files.ensureUserHome(admin);

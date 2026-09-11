@@ -10,4 +10,7 @@ public interface AclRepository extends JpaRepository<AclEntry, UUID> {
     List<AclEntry> findByNodeId(UUID nodeId);
     void deleteByNodeId(UUID nodeId);
     long countByNodeId(UUID nodeId);
+
+    /** 删除某主体(用户/组)的全部授权条目:组被删除时避免悬挂授权。 */
+    void deleteByPrincipalTypeAndPrincipalId(AclEntry.PrincipalType principalType, UUID principalId);
 }

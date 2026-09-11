@@ -49,6 +49,21 @@ public class GroupController {
         return groups.addMember(id, userId);
     }
 
+    @PatchMapping("/{id}")
+    public GroupService.GroupDto rename(@AuthenticationPrincipal SessionPrincipal me,
+                                        @PathVariable UUID id,
+                                        @RequestBody CreateGroup req) {
+        requireAdmin(me);
+        return groups.rename(id, req.name());
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@AuthenticationPrincipal SessionPrincipal me, @PathVariable UUID id) {
+        requireAdmin(me);
+        groups.delete(id);
+    }
+
     @DeleteMapping("/{id}/members/{userId}")
     public GroupService.GroupDto removeMember(@AuthenticationPrincipal SessionPrincipal me,
                                               @PathVariable UUID id,
