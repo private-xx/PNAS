@@ -107,13 +107,13 @@ public class UploadService {
 
     @Transactional
     public Completed complete(UUID actorId, UUID uploadId) {
-        UploadSession s = requireOwned(uploadId, actorId);
+        UploadSession s = requireOwnedForUpdate(uploadId, actorId);
         if ("COMPLETE".equals(s.getState())) {
             // 幂等:客户端在"服务端已完成但响应丢失"后重试/探测时,返回既有结果,避免重复上传或重复建版本
             Node file = nodes.findByParentIdAndNameAndTrashedAtIsNull(
                     s.getDestParent().getId(), s.getFilename())
-                .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
-                    HttpStatus.BAD_REQUEST, "会话已完成但目标文件不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT,
+                    "会话已完成但目标文件已被移动/改名;请刷新目录确认结果"));
             int existingVer = versions.findTopByNodeIdOrderByVersionNoDesc(file.getId())
                 .map(FileVersion::getVersionNo).orElse(0);
             return new Completed(file.getId(), existingVer, s.getTotalSize(), true);
@@ -188,7 +188,19 @@ public class UploadService {
         s.setState("CANCELLED");
     }
 
-    /** 会话必须属于该主体(不限状态,供 complete 的幂等探测使用)。 */
+    /** 会话必须属于该主体;**加行锁**,用于 complete 的幂等与并发串行化。 */
+    private UploadSession requireOwnedForUpdate(UUID uploadId, UUID actorId) {
+        UploadSession s = sessions.findByIdForUpdate(uploadId)
+            .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
+                HttpStatus.BAD_REQUEST, "上传会话不存在"));
+        if (!s.getUser().getId().equals(actorId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN,
+                "上传会话不属于当前用户");
+        }
+        return s;
+    }
+
+    /** 会话必须属于该主体(不限状态,供幂等探测使用)。 */
     private UploadSession requireOwned(UUID uploadId, UUID actorId) {
         UploadSession s = sessions.findById(uploadId)
             .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,

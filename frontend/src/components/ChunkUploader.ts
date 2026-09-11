@@ -143,6 +143,9 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
         // 先探测:服务端可能已完成(崩溃/响应丢失),complete 幂等返回既有结果
         try {
           await uploadsApi.completeUpload(uploadId)
+          if (isCancelled(task)) {
+            return // 完成响应回来前用户已取消:不得翻成 done
+          }
           finishTask(task)
           onCompleted()
           return
@@ -155,6 +158,9 @@ export function useUploader(destParentId: () => string | null, onCompleted: () =
       throw error
     }
 
+    if (isCancelled(task)) {
+      return // 完成请求期间被取消:不标记完成、不触发刷新
+    }
     finishTask(task)
     onCompleted()
   }
