@@ -18,7 +18,9 @@ import java.util.UUID;
 
 /**
  * DB 任务队列(ADR-09)。调度器周期性调用 {@link #runDue()};测试用 {@link #claimAndRunAllNow()} 同步执行。
- * 单任务在**同一事务**内 claim→执行→落结果(M2 任务均为短任务;长任务拆分留待后续里程碑)。
+ *
+ * <p>领取与执行**不再包一层大事务**:每个任务的终态由单次 {@code jobs.save} 通过仓库自身事务落库,
+ * 避免长任务长时间持有连接(M2 任务均为短任务;失败重试与死信由 {@code markFailed} 决定)。</p>
  */
 @Service
 public class JobService {

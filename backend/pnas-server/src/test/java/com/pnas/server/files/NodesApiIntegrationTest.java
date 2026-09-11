@@ -104,6 +104,24 @@ class NodesApiIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void zeroByteFileFullDownloadIsEmptyButOk() throws Exception {
+        var admin = login("admin", "admin-secret");
+        var adminUser = users.findByUsername("admin").orElseThrow();
+        var home = files.ensureUserHome(adminUser);
+        UUID uploadId = uploads.start(adminUser, home.getId(),
+            "empty-" + UUID.randomUUID() + ".txt", 0);
+        var file = uploads.complete(adminUser.getId(), uploadId);
+
+        // 无 Range 的全量下载:0 字节文件应 200 + Content-Length: 0(空分块流路径)
+        var res = mvc.perform(get("/api/v1/nodes/{id}/content", file.nodeId())
+                .header("Cookie", admin.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Content-Length", "0"))
+            .andReturn();
+        assertThat(res.getResponse().getContentAsByteArray()).isEmpty();
+    }
+
+    @Test
     void listedHomeIsIsolatedBetweenUsers() throws Exception {
         var admin = login("admin", "admin-secret");
         createDirJson(admin, null, "隔离-文件-" + UUID.randomUUID());
