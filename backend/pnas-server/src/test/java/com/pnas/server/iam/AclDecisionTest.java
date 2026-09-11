@@ -107,4 +107,39 @@ class AclDecisionTest extends AbstractIntegrationTest {
             .hasMessageContaining("无权管理");
         assertThat(acl.canManage(principal(alice), home.getId())).isTrue();
     }
+
+    @Test
+    void adminBypassesAclChain() {
+        var alice = user("acl-alice6");
+        var admin = users.findByUsername("admin").orElseThrow();
+        Node home = files.ensureUserHome(alice);
+
+        // 无任何 ACL 条目时成员被拒,ADMIN 短路放行
+        assertThat(acl.hasPermission(principal(admin), home.getId(), 'r')).isTrue();
+        assertThat(acl.hasPermission(principal(admin), home.getId(), 'w')).isTrue();
+        assertThat(acl.canManage(principal(admin), home.getId())).isTrue();
+    }
+
+    @Test
+    void duplicatePrincipalInOneRequestIsRejected() {
+        var alice = user("acl-alice7");
+        var bob = user("acl-bob7");
+        Node home = files.ensureUserHome(alice);
+
+        assertThatThrownBy(() -> acl.setAcl(principal(alice), home.getId(), List.of(
+            new AclService.EntryDto("USER", bob.getId(), "r", true),
+            new AclService.EntryDto("USER", bob.getId(), "rw", true))))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("重复");
+    }
+
+    @Test
+    void nullEntriesIsRejected() {
+        var alice = user("acl-alice8");
+        Node home = files.ensureUserHome(alice);
+
+        assertThatThrownBy(() -> acl.setAcl(principal(alice), home.getId(), null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不能为空");
+    }
 }

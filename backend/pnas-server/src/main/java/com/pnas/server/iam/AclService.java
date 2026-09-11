@@ -104,12 +104,21 @@ public class AclService {
     @Transactional
     public List<EntryDto> setAcl(SessionPrincipal me, UUID nodeId, List<EntryDto> entries) {
         requireManage(me, nodeId);
+        if (entries == null) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "entries 不能为空");
+        }
         Node node = nodes.findById(nodeId).orElseThrow(() -> new BusinessException(
             ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "节点不存在: " + nodeId));
         acls.deleteByNodeId(nodeId);
         List<AclEntry> toSave = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
         for (EntryDto dto : entries) {
             validate(dto);
+            String key = parseType(dto.principalType()).name() + ":" + dto.principalId();
+            if (!seen.add(key)) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST,
+                    "同一主体在本次请求中重复: " + key);
+            }
             toSave.add(AclEntry.of(node, parseType(dto.principalType()), dto.principalId(),
                 dto.perms(), dto.inherit() == null || dto.inherit()));
         }
