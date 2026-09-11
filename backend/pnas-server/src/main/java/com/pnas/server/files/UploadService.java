@@ -59,6 +59,13 @@ public class UploadService {
             throw new BusinessException(ErrorCode.PARENT_NOT_DIRECTORY,
                 HttpStatus.BAD_REQUEST, "目标不是目录");
         }
+        if (totalSize < 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST,
+                "文件大小不能为负: " + totalSize);
+        }
+        if (filename == null || filename.isBlank()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "文件名不能为空");
+        }
         var s = new UploadSession();
         s.setUser(owner);
         s.setDestParent(dir);
@@ -75,6 +82,10 @@ public class UploadService {
     @Transactional
     public void acceptChunk(UUID actorId, UUID uploadId, int seq, InputStream body, String sha256) {
         UploadSession s = requireOpenFor(uploadId, actorId);
+        if (chunkCount(s) == 0) {
+            throw new BusinessException(ErrorCode.CHUNK_INVALID, HttpStatus.BAD_REQUEST,
+                "空文件无需上传分块");
+        }
         long expected = expectedChunkSize(s, seq);
         try {
             blobs.store(body, expected, sha256);
@@ -116,13 +127,17 @@ public class UploadService {
             manifest.append(s.getChunkHashes().get(i));
         }
 
+        String manifestHex = Sha256.hex(manifest.toString().getBytes(StandardCharsets.UTF_8));
+        // 去重语义:该内容的版本此前已存在于仓库(秒传命中)
+        boolean dedup = versions.existsByManifestSha256(manifestHex);
+
         var fv = new FileVersion();
         fv.setNode(file);
         fv.setVersionNo(nextVer);
         fv.setSizeBytes(s.getTotalSize());
         fv.setMimeType("application/octet-stream");
         fv.setCreatedBy(user);
-        fv.setManifestSha256(Sha256.hex(manifest.toString().getBytes(StandardCharsets.UTF_8)));
+        fv.setManifestSha256(manifestHex);
         versions.save(fv);
 
         List<VersionChunk> rows = new ArrayList<>();
@@ -138,7 +153,6 @@ public class UploadService {
 
         file.setSizeBytes(s.getTotalSize());
         s.setState("COMPLETE");
-        boolean dedup = rows.stream().allMatch(c -> blobs.exists(c.getBlobHash()));
         return new Completed(file.getId(), nextVer, s.getTotalSize(), dedup);
     }
 
@@ -170,7 +184,7 @@ public class UploadService {
     }
 
     private int chunkCount(UploadSession s) {
-        if (s.getTotalSize() <= 0) return 1;
+        if (s.getTotalSize() <= 0) return 0; // 空文件:0 块,complete 直接建 0 块版本
         return (int) ((s.getTotalSize() + chunkSize - 1) / chunkSize);
     }
 

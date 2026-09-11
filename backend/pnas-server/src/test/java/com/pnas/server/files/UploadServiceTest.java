@@ -3,14 +3,18 @@ package com.pnas.server.files;
 import com.pnas.server.AbstractIntegrationTest;
 import com.pnas.server.blobstore.BlobStore;
 import com.pnas.server.blobstore.Sha256;
+import com.pnas.server.common.error.BusinessException;
 import com.pnas.server.iam.UserRepository;
 import com.pnas.server.iam.domain.User;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class UploadServiceTest extends AbstractIntegrationTest {
 
@@ -19,9 +23,20 @@ class UploadServiceTest extends AbstractIntegrationTest {
     @Autowired UserRepository users;
     @Autowired BlobStore blobs;
 
+    private User admin() {
+        return users.findByUsername("admin").orElseThrow();
+    }
+
+    /** 走完整上传流程(单块即可,内容 < 4MiB)。 */
+    private UploadService.Completed upload(User owner, UUID parentId, String name, byte[] content) {
+        UUID uploadId = uploads.start(owner, parentId, name, content.length);
+        uploads.acceptChunk(owner.getId(), uploadId, 0, new ByteArrayInputStream(content), Sha256.hex(content));
+        return uploads.complete(owner.getId(), uploadId);
+    }
+
     @Test
     void uploadTwoChunksCreatesVersionedFile() {
-        var admin = users.findByUsername("admin").orElseThrow();
+        var admin = admin();
         var home = files.ensureUserHome(admin);
         // 服务端分块固定 4MiB(全局约束);两个整块 = 8MiB
         int chunk = 4 * 1024 * 1024;
@@ -41,5 +56,54 @@ class UploadServiceTest extends AbstractIntegrationTest {
         assertThat(done.versionNo()).isEqualTo(1);
         assertThat(blobs.exists(shaA)).isTrue();
         assertThat(blobs.exists(shaB)).isTrue();
+    }
+
+    @Test
+    void zeroByteFileCreatesVersionWithoutChunks() {
+        var admin = admin();
+        var home = files.ensureUserHome(admin);
+        UUID uploadId = uploads.start(admin, home.getId(), "empty-" + UUID.randomUUID() + ".txt", 0);
+
+        assertThatThrownBy(() -> uploads.acceptChunk(admin.getId(), uploadId, 0,
+            new ByteArrayInputStream(new byte[0]), Sha256.hex(new byte[0])))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("空文件");
+
+        var done = uploads.complete(admin.getId(), uploadId);
+        assertThat(done.versionNo()).isEqualTo(1);
+        assertThat(done.size()).isZero();
+    }
+
+    @Test
+    void reuploadSameNameCreatesNewVersionAndDetectsDuplicateContent() {
+        var admin = admin();
+        var home = files.ensureUserHome(admin);
+        String name = "versioned-" + UUID.randomUUID() + ".txt";
+        byte[] first = "v1-content".getBytes(StandardCharsets.UTF_8);
+        byte[] second = "v2-content".getBytes(StandardCharsets.UTF_8);
+
+        var v1 = upload(admin, home.getId(), name, first);
+        assertThat(v1.versionNo()).isEqualTo(1);
+        assertThat(v1.dedup()).isFalse();
+
+        // FR-FS-04:同名再传 = 新版本,绝不覆盖
+        var v2 = upload(admin, home.getId(), name, second);
+        assertThat(v2.nodeId()).isEqualTo(v1.nodeId());
+        assertThat(v2.versionNo()).isEqualTo(2);
+        assertThat(v2.dedup()).isFalse();
+
+        // 相同内容再次上传 → 去重命中(清单哈希已存在)
+        var v3 = upload(admin, home.getId(), name, second);
+        assertThat(v3.versionNo()).isEqualTo(3);
+        assertThat(v3.dedup()).isTrue();
+    }
+
+    @Test
+    void negativeSizeIsRejected() {
+        var admin = admin();
+        var home = files.ensureUserHome(admin);
+        assertThatThrownBy(() -> uploads.start(admin, home.getId(), "bad.txt", -1))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不能为负");
     }
 }

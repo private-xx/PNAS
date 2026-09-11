@@ -227,6 +227,14 @@ public class FilesService {
         require(requireNode(nodeId), me, perm);
     }
 
+    /** 载入节点并要求调用者对其有读权限(brief 交付面:resolveNode/loadOwnedNode 的等价实现)。 */
+    @Transactional(readOnly = true)
+    public Node loadOwnedNode(SessionPrincipal me, UUID nodeId) {
+        Node node = requireNode(nodeId);
+        require(node, me, 'r');
+        return node;
+    }
+
     @Transactional(readOnly = true)
     public Node requireNode(UUID nodeId) {
         return nodes.findById(nodeId).orElseThrow(() -> new BusinessException(

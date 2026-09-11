@@ -13,4 +13,7 @@ public interface FileVersionRepository extends JpaRepository<FileVersion, UUID> 
     List<FileVersion> findAllByNodeIdOrderByVersionNoDesc(UUID nodeId);
 
     Optional<FileVersion> findByNodeIdAndVersionNo(UUID nodeId, int versionNo);
+
+    /** 去重判定:同样内容(清单哈希)是否已存在于仓库。 */
+    boolean existsByManifestSha256(String manifestSha256);
 }
