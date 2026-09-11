@@ -48,10 +48,15 @@ CSRF_BOB=$(login "$COOKIE_BOB" "$BOB" secret123)
 if [ -n "$CSRF_BOB" ]; then ok "成员登录并取得 CSRF"; else bad "成员登录失败"; fi
 
 echo "[4] 两用户隔离"
-HOME_JSON=$(curl -s -b "$COOKIE_ADMIN" -X POST "$API/nodes" \
+DIRNAME="验收-目录-$RANDOM"
+CREATE=$(curl -s -w '\n%{http_code}' -b "$COOKIE_ADMIN" -X POST "$API/nodes" \
   -H 'Content-Type: application/json' -H "X-CSRF: $CSRF_ADMIN" \
-  -d '{"parentId":null,"name":"验收-目录"}')
-ADMIN_HOME=$(printf '%s' "$HOME_JSON" | sed -n 's/.*"parentId":"\([^"]*\)".*/\1/p')
+  -d "{\"parentId\":null,\"name\":\"$DIRNAME\"}")
+CREATE_CODE="${CREATE##*$'\n'}"
+CREATE_BODY="${CREATE%$'\n'*}"
+check "POST /nodes(建目录)" "$CREATE_CODE" "200"
+ADMIN_HOME=$(printf '%s' "$CREATE_BODY" | sed -n 's/.*"parentId":"\([^"]*\)".*/\1/p')
+if [ -n "$ADMIN_HOME" ]; then ok "取得管理员家目录 id"; else bad "无法解析家目录 id(响应: $CREATE_BODY)"; fi
 code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_BOB" "$API/nodes?parentId=$ADMIN_HOME")
 check "成员读取管理员目录被拒" "$code" "403"
 code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_ADMIN" "$API/nodes")
@@ -80,7 +85,7 @@ put_chunk() { # put_chunk <uploadId> <seq> <file> <offset> <len>
     -H 'Content-Type: application/octet-stream' --data-binary @"$WORK/chunk.bin"
 }
 
-UID1=$(start_upload "验收-大文件.bin")
+UID1=$(start_upload "验收-大文件-$RANDOM.bin")
 CHUNK=4194304
 code=$(put_chunk "$UID1" 0 "$BIG" 0 "$CHUNK")
 check "上传第 0 块" "$code" "204"
@@ -95,7 +100,7 @@ SHA_REMOTE=$(shasum -a 256 "$WORK/downloaded.bin" | awk '{print $1}')
 check "下载内容哈希一致" "$SHA_REMOTE" "$SHA_LOCAL"
 
 echo "[6] 断点续传(中断后仅补传缺失块)"
-UID2=$(start_upload "验收-续传.bin")
+UID2=$(start_upload "验收-续传-$RANDOM.bin")
 put_chunk "$UID2" 0 "$BIG" 0 "$CHUNK" >/dev/null   # 传第 0 块后"中断"
 code=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_ADMIN" -X POST "$API/uploads/$UID2/complete" \
   -H "X-CSRF: $CSRF_ADMIN")
