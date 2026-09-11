@@ -35,8 +35,23 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/auth/session").permitAll()
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 .anyRequest().authenticated())
+            // 未登录 → 401,已登录但无权 → 403(统一 JSON 错误体,避免默认 HTML/403 混淆)
+            .exceptionHandling(e -> e
+                .authenticationEntryPoint((req, res, ex) ->
+                    writeJson(res, 401, "unauthorized", "未登录或会话已失效"))
+                .accessDeniedHandler((req, res, ex) ->
+                    writeJson(res, 403, "forbidden", "无权访问")))
             .addFilterBefore(sessionFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterAfter(csrf, SessionAuthFilter.class);
         return http.build();
+    }
+
+    private static void writeJson(jakarta.servlet.http.HttpServletResponse res,
+                                  int status, String code, String message) throws java.io.IOException {
+        res.setStatus(status);
+        res.setContentType(org.springframework.http.MediaType.APPLICATION_JSON_VALUE);
+        res.setCharacterEncoding("UTF-8");
+        new com.fasterxml.jackson.databind.ObjectMapper()
+            .writeValue(res.getWriter(), new com.pnas.server.common.error.ApiError(code, message, null));
     }
 }
