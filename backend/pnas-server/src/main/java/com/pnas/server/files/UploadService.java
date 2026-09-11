@@ -1,0 +1,181 @@
+package com.pnas.server.files;
+
+import com.pnas.common.error.ErrorCode;
+import com.pnas.server.blobstore.BlobStore;
+import com.pnas.server.blobstore.Sha256;
+import com.pnas.server.common.PnasProperties;
+import com.pnas.server.common.error.BusinessException;
+import com.pnas.server.files.domain.FileVersion;
+import com.pnas.server.files.domain.Node;
+import com.pnas.server.files.domain.UploadSession;
+import com.pnas.server.files.domain.VersionChunk;
+import com.pnas.server.iam.domain.User;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 分块上传:先落块(blobstore 校验+去重),后提交元数据(版本化写入,绝不静默覆盖)。
+ * 语义见架构 v0.3 §6.3 与需求 FR-FS-02/04。
+ */
+@Service
+public class UploadService {
+
+    private final UploadSessionRepository sessions;
+    private final NodeRepository nodes;
+    private final FileVersionRepository versions;
+    private final VersionChunkRepository chunks;
+    private final BlobStore blobs;
+    private final int chunkSize;
+
+    public UploadService(UploadSessionRepository sessions, NodeRepository nodes,
+                         FileVersionRepository versions, VersionChunkRepository chunks,
+                         BlobStore blobs, PnasProperties props) {
+        this.sessions = sessions;
+        this.nodes = nodes;
+        this.versions = versions;
+        this.chunks = chunks;
+        this.blobs = blobs;
+        this.chunkSize = props.upload().chunkSize();
+    }
+
+    public record Completed(UUID nodeId, int versionNo, long size, boolean dedup) {}
+
+    /** 建上传会话。调用方必须先校验对 destParent 的写权限(见 Task 7 Controller)。 */
+    @Transactional
+    public UUID start(User owner, UUID destParentId, String filename, long totalSize) {
+        Node dir = nodes.findById(destParentId)
+            .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND,
+                HttpStatus.NOT_FOUND, "目标目录不存在"));
+        if (dir.getKind() != Node.Kind.DIR) {
+            throw new BusinessException(ErrorCode.PARENT_NOT_DIRECTORY,
+                HttpStatus.BAD_REQUEST, "目标不是目录");
+        }
+        var s = new UploadSession();
+        s.setUser(owner);
+        s.setDestParent(dir);
+        s.setFilename(filename);
+        s.setTotalSize(totalSize);
+        s.setChunkSize(chunkSize);
+        s.setState("OPEN");
+        s.setReceivedChunks(new ArrayList<>());
+        s.setChunkHashes(new HashMap<>());
+        s.setChunkSizes(new HashMap<>());
+        return sessions.save(s).getId();
+    }
+
+    @Transactional
+    public void acceptChunk(UUID uploadId, int seq, InputStream body, String sha256) {
+        UploadSession s = requireOpen(uploadId);
+        long expected = expectedChunkSize(s, seq);
+        try {
+            blobs.store(body, expected, sha256);
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCode.CHUNK_INVALID,
+                HttpStatus.BAD_REQUEST, "分块校验失败: " + e.getMessage());
+        }
+        if (!s.getReceivedChunks().contains(seq)) {
+            s.getReceivedChunks().add(seq);
+        }
+        s.getChunkHashes().put(seq, sha256);
+        s.getChunkSizes().put(seq, expected);
+    }
+
+    @Transactional
+    public Completed complete(UUID uploadId) {
+        UploadSession s = requireOpen(uploadId);
+        int count = chunkCount(s);
+        if (s.getReceivedChunks().size() != count) {
+            throw new BusinessException(ErrorCode.CHUNK_MISSING, HttpStatus.BAD_REQUEST,
+                "分块不完整: 已收 " + s.getReceivedChunks().size() + "/" + count);
+        }
+        for (int i = 0; i < count; i++) {
+            if (s.getChunkHashes().get(i) == null) {
+                throw new BusinessException(ErrorCode.CHUNK_MISSING, HttpStatus.BAD_REQUEST,
+                    "缺少第 " + i + " 块的哈希记录");
+            }
+        }
+        var user = s.getUser();
+        Node dir = s.getDestParent();
+        // 同目录同名文件 → 新增版本;否则创建 FILE 节点(版本化写入,FR-FS-04)
+        Node file = nodes.findByParentIdAndNameAndTrashedAtIsNull(dir.getId(), s.getFilename())
+            .orElseGet(() -> nodes.save(Node.file(user, dir, s.getFilename())));
+        int nextVer = versions.findTopByNodeIdOrderByVersionNoDesc(file.getId())
+            .map(v -> v.getVersionNo() + 1).orElse(1);
+
+        var manifest = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            manifest.append(s.getChunkHashes().get(i));
+        }
+
+        var fv = new FileVersion();
+        fv.setNode(file);
+        fv.setVersionNo(nextVer);
+        fv.setSizeBytes(s.getTotalSize());
+        fv.setMimeType("application/octet-stream");
+        fv.setCreatedBy(user);
+        fv.setManifestSha256(Sha256.hex(manifest.toString().getBytes(StandardCharsets.UTF_8)));
+        versions.save(fv);
+
+        List<VersionChunk> rows = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            var c = new VersionChunk();
+            c.setVersion(fv);
+            c.setSeq(i);
+            c.setBlobHash(s.getChunkHashes().get(i));
+            c.setSizeBytes(s.getChunkSizes().getOrDefault(i, 0L));
+            rows.add(c);
+        }
+        chunks.saveAll(rows);
+
+        file.setSizeBytes(s.getTotalSize());
+        s.setState("COMPLETE");
+        boolean dedup = rows.stream().allMatch(c -> blobs.exists(c.getBlobHash()));
+        return new Completed(file.getId(), nextVer, s.getTotalSize(), dedup);
+    }
+
+    @Transactional
+    public void cancel(UUID uploadId) {
+        UploadSession s = sessions.findById(uploadId)
+            .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
+                HttpStatus.BAD_REQUEST, "上传会话不存在"));
+        s.setState("CANCELLED");
+    }
+
+    private UploadSession requireOpen(UUID uploadId) {
+        UploadSession s = sessions.findById(uploadId)
+            .orElseThrow(() -> new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
+                HttpStatus.BAD_REQUEST, "上传会话不存在"));
+        if (!"OPEN".equals(s.getState())) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_INVALID,
+                HttpStatus.BAD_REQUEST, "上传会话不在 OPEN 状态");
+        }
+        return s;
+    }
+
+    private int chunkCount(UploadSession s) {
+        if (s.getTotalSize() <= 0) return 1;
+        return (int) ((s.getTotalSize() + chunkSize - 1) / chunkSize);
+    }
+
+    private long expectedChunkSize(UploadSession s, int seq) {
+        int count = chunkCount(s);
+        if (seq < 0 || seq >= count) {
+            throw new BusinessException(ErrorCode.CHUNK_INVALID,
+                HttpStatus.BAD_REQUEST, "分块序号越界: " + seq);
+        }
+        if (seq == count - 1) {
+            long remainder = s.getTotalSize() - (long) chunkSize * (count - 1);
+            return remainder > 0 ? remainder : chunkSize;
+        }
+        return chunkSize;
+    }
+}
