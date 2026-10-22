@@ -19,6 +19,11 @@ async function logout() {
   <div class="app">
     <header v-if="!isLoginPage" class="topbar">
       <div class="brand">PNAS</div>
+      <nav class="nav">
+        <router-link to="/">文件</router-link>
+        <router-link to="/media">媒体</router-link>
+        <router-link to="/media/albums">相册</router-link>
+      </nav>
       <div class="spacer" />
       <span class="user">{{ session.displayName || session.username }}</span>
       <el-button size="small" text @click="logout">退出</el-button>
@@ -46,6 +51,21 @@ async function logout() {
 .brand {
   font-weight: 700;
   letter-spacing: 0.2rem;
+}
+.nav {
+  display: flex;
+  gap: 1rem;
+  margin-left: 1.5rem;
+}
+.nav a {
+  color: #606266;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+/* 用 exact-active:根路径 `/` 的 router-link-active 会在所有页面命中 */
+.nav a.router-link-exact-active {
+  color: #409eff;
+  font-weight: 600;
 }
 .spacer {
   flex: 1;
