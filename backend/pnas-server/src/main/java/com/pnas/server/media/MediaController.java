@@ -136,8 +136,9 @@ public class MediaController {
             }
         };
         var builder = ResponseEntity.status(spec.ranged() ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
+            .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(spec.length()))
             .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-            .contentLength(spec.length());
+            .contentType(MediaType.APPLICATION_OCTET_STREAM);
         if (spec.ranged()) {
             builder.header(HttpHeaders.CONTENT_RANGE,
                 "bytes " + spec.start() + "-" + (spec.start() + spec.length() - 1) + "/" + total);
