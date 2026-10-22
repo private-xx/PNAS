@@ -20,4 +20,14 @@ class SchemaMigrationTest extends AbstractIntegrationTest {
             """, Integer.class);
         assertThat(n).isEqualTo(10);
     }
+
+    @Test
+    void mediaAssetsTableHasExpectedColumns() {
+        var columns = jdbc.queryForList(
+            "select column_name from information_schema.columns where table_name = 'media_assets'",
+            String.class);
+        assertThat(columns).contains("id", "file_version_id", "node_id", "kind", "taken_at",
+            "taken_at_source", "width", "height", "gps_lat", "gps_lon", "duration_ms",
+            "thumb_status", "indexed_at");
+    }
 }
