@@ -213,6 +213,19 @@ public class FilesService {
         return new ContentStream(Streams.limit(joined, len), total, start, len);
     }
 
+    /** 媒体 job 等内部受信调用:按版本打开完整内容流(不校验 ACL,不暴露给 HTTP 层)。 */
+    public InputStream openVersion(UUID versionId) {
+        List<InputStream> parts = new ArrayList<>();
+        for (VersionChunk c : chunks.findAllByVersionIdOrderBySeqAsc(versionId)) {
+            try {
+                parts.add(blobs.open(c.getBlobHash()));
+            } catch (IOException e) {
+                throw new UncheckedIOException("读取分块失败: " + c.getBlobHash(), e);
+            }
+        }
+        return Streams.concat(parts);
+    }
+
     // ---------------------------------------------------------------- 内部
 
     /** 当前版本大小(用于 Range 计算)。 */
