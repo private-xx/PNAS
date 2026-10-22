@@ -21,12 +21,16 @@ public record RangeSpec(long start, long length, boolean ranged) {
                 "仅支持单段 Range");
         }
         int dash = spec.indexOf('-');
+        // M2 兼容:bytes=N 视作开放区间 N→末尾(与 bytes=N- 等价)
+        String first;
+        String last;
         if (dash < 0) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST,
-                "Range 格式不合法: " + header);
+            first = spec.trim();
+            last = "";
+        } else {
+            first = spec.substring(0, dash).trim();
+            last = spec.substring(dash + 1).trim();
         }
-        String first = spec.substring(0, dash).trim();
-        String last = spec.substring(dash + 1).trim();
         try {
             long start;
             long end;
