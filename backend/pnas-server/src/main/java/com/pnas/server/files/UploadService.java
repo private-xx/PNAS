@@ -18,7 +18,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -45,12 +50,14 @@ public class UploadService {
     private final BlobStore blobs;
     private final AclService acl;
     private final ObjectProvider<JobService> jobs;
+    /** afterCommit 阶段原事务资源仍绑定,入队必须显式开新事务,否则写入会"参与"已提交事务而丢失(R18)。 */
+    private final TransactionTemplate enqueueTx;
     private final int chunkSize;
 
     public UploadService(UploadSessionRepository sessions, NodeRepository nodes,
                          FileVersionRepository versions, VersionChunkRepository chunks,
                          BlobStore blobs, AclService acl, ObjectProvider<JobService> jobs,
-                         PnasProperties props) {
+                         PlatformTransactionManager txManager, PnasProperties props) {
         this.sessions = sessions;
         this.nodes = nodes;
         this.versions = versions;
@@ -58,6 +65,8 @@ public class UploadService {
         this.blobs = blobs;
         this.acl = acl;
         this.jobs = jobs;
+        this.enqueueTx = new TransactionTemplate(txManager);
+        this.enqueueTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.chunkSize = props.upload().chunkSize();
     }
 
@@ -190,7 +199,7 @@ public class UploadService {
         file.setSizeBytes(s.getTotalSize());
         s.setState("COMPLETE");
         // 正常提交路径才触发扫描;幂等分支(会话已 COMPLETE)不重复入队
-        enqueueMediaScan(file.getId(), fv.getId());
+        enqueueMediaScanAfterCommit(file.getId(), fv.getId());
         return new Completed(file.getId(), nextVer, s.getTotalSize(), dedup);
     }
 
@@ -198,6 +207,29 @@ public class UploadService {
     public void cancel(UUID actorId, UUID uploadId) {
         UploadSession s = requireOpenFor(uploadId, actorId);
         s.setState("CANCELLED");
+    }
+
+    /**
+     * R18:入队必须在**提交之后**执行,否则 (a) 入队抛异常会污染上传事务(rollback-only),
+     * (b) 调度器可能在本事务提交前领到 media.scan,读不到刚写入的版本行。
+     * 无活动事务同步时(理论上不会发生)退化为立即入队。
+     */
+    private void enqueueMediaScanAfterCommit(UUID nodeId, UUID versionId) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    // 必须 REQUIRES_NEW:afterCommit 时原事务资源仍绑定,默认传播会加入已提交事务导致丢写
+                    try {
+                        enqueueTx.executeWithoutResult(status -> enqueueMediaScan(nodeId, versionId));
+                    } catch (Exception e) {
+                        log.warn("提交后入队 media.scan 失败,nodeId={} versionId={}", nodeId, versionId, e);
+                    }
+                }
+            });
+        } else {
+            enqueueMediaScan(nodeId, versionId);
+        }
     }
 
     /** 上传完成后入队媒体扫描;入队失败只告警,绝不让上传失败(可用 media.reindex 兜底)。 */

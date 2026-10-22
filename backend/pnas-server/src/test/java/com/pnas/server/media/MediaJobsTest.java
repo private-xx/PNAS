@@ -1,6 +1,7 @@
 package com.pnas.server.media;
 
 import com.pnas.server.AbstractIntegrationTest;
+import com.pnas.server.auth.SessionPrincipal;
 import com.pnas.server.blobstore.DerivedStore;
 import com.pnas.server.blobstore.Sha256;
 import com.pnas.server.files.FileVersionRepository;
@@ -17,6 +18,7 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
@@ -124,5 +126,71 @@ class MediaJobsTest extends AbstractIntegrationTest {
 
         assertThat(assets.count()).isEqualTo(before);   // 重复扫描不新增记录
         assertThat(assets.findByFileVersionId(built.versionId())).isPresent();
+    }
+
+    @Test
+    void completeEnqueuesScanOnceOnNormalPathOnly() throws Exception {
+        var admin = users.findByUsername("admin").orElseThrow();
+        var home = files.ensureUserHome(admin);
+        byte[] jpeg = TestImages.plainJpeg(64, 48);
+        UUID uploadId = uploads.start(admin, home.getId(),
+            "once-" + UUID.randomUUID() + ".jpg", jpeg.length);
+        uploads.acceptChunk(admin.getId(), uploadId, 0, new ByteArrayInputStream(jpeg),
+            Sha256.hex(jpeg));
+
+        var done = uploads.complete(admin.getId(), uploadId);
+        UUID versionId = versions.findTopByNodeIdOrderByVersionNoDesc(done.nodeId())
+            .orElseThrow().getId();
+        // R18:提交后入队确实落库(若在 afterCommit 里加入旧事务,这里会是 0)
+        assertThat(scanJobsFor(versionId)).isEqualTo(1);
+
+        // 幂等分支(会话已 COMPLETE):返回既有结果,不重复入队
+        uploads.complete(admin.getId(), uploadId);
+        assertThat(scanJobsFor(versionId)).isEqualTo(1);
+    }
+
+    private long scanJobsFor(UUID versionId) {
+        return jobs.list(null).stream()
+            .filter(j -> "media.scan".equals(j.getType()))
+            .filter(j -> versionId.toString().equals(j.getPayload().get("versionId")))
+            .count();
+    }
+
+    @Test
+    void thumbReadyRequiresBothSizes() throws Exception {
+        var built = upload("ready-" + UUID.randomUUID() + ".jpg", TestImages.plainJpeg(640, 480));
+        drainJobs();
+        String sha = versions.findById(built.versionId()).orElseThrow().getManifestSha256();
+        assertThat(assets.findByFileVersionId(built.versionId()).orElseThrow().getThumbStatus())
+            .isEqualTo(ThumbStatus.READY);
+
+        // 模拟 512 派生文件缺失而状态仍是 READY:再跑一次 256,必须回退 PENDING
+        Files.deleteIfExists(derived.thumbPath(sha, 512));
+        jobs.enqueue("media.thumb", Map.of(
+            "nodeId", built.nodeId().toString(),
+            "versionId", built.versionId().toString(),
+            "size", 256));
+        drainJobs();
+
+        assertThat(derived.exists(sha, 256)).isTrue();
+        assertThat(derived.exists(sha, 512)).isFalse();
+        assertThat(assets.findByFileVersionId(built.versionId()).orElseThrow().getThumbStatus())
+            .isEqualTo(ThumbStatus.PENDING);
+    }
+
+    @Test
+    void reindexSkipsTrashedNodes() throws Exception {
+        var built = upload("trashed-" + UUID.randomUUID() + ".jpg", TestImages.plainJpeg(120, 90));
+        drainJobs();
+        // 造出"已入库的媒体版本,但节点已进回收站且 asset 被清掉"的场景
+        assets.findByFileVersionId(built.versionId()).ifPresent(assets::delete);
+        var admin = users.findByUsername("admin").orElseThrow();
+        files.trash(new SessionPrincipal(admin.getId(), admin.getUsername(), admin.getRole(),
+            UUID.randomUUID()), built.nodeId());
+
+        jobs.enqueue("media.reindex", Map.of());
+        drainJobs();
+
+        assertThat(assets.findByFileVersionId(built.versionId())).isEmpty();
     }
 }

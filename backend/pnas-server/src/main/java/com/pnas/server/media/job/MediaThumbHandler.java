@@ -27,6 +27,9 @@ import java.util.UUID;
 @Component
 public class MediaThumbHandler implements JobHandler {
 
+    /** READY 要求两个尺寸都已有派生文件(scan 只入队这两个尺寸)。 */
+    private static final int[] REQUIRED_SIZES = {256, 512};
+
     private final ThumbnailService thumbs;
     private final DerivedStore derived;
     private final FilesService files;
@@ -63,8 +66,8 @@ public class MediaThumbHandler implements JobHandler {
         String sha = version.getManifestSha256();
         MediaAsset asset = assets.findByFileVersionId(versionId).orElse(null);
         if (derived.exists(sha, size)) {
-            // 幂等:派生文件已存在。仍补写状态,避免"已生成但未来得及标 READY"时永远停在 PENDING。
-            markThumb(asset, ThumbStatus.READY);
+            // 幂等:派生文件已存在。仅当两个尺寸都齐备才 READY(修复旧状态/补写状态)
+            markReadyIfAllSizes(asset, sha);
             return Map.of("generated", false, "size", size);
         }
         // R17:先单独读一次 EXIF(流会被消费),再开新流做渲染
@@ -79,8 +82,29 @@ public class MediaThumbHandler implements JobHandler {
             markThumb(asset, ThumbStatus.SKIPPED);
             return Map.of("generated", false, "skipped", true);
         }
-        markThumb(asset, ThumbStatus.READY);
+        markReadyIfAllSizes(asset, sha);
         return Map.of("generated", true, "size", size);
+    }
+
+    /**
+     * READY 的语义是"256 与 512 两个派生文件都存在":只生成一个尺寸时保持 PENDING,
+     * 避免 512 失败而状态已 READY。若发现历史 READY 状态与实际派生文件不一致,回退 PENDING。
+     */
+    private void markReadyIfAllSizes(MediaAsset asset, String sha) {
+        if (asset == null) {
+            return;
+        }
+        boolean allSizes = true;
+        for (int required : REQUIRED_SIZES) {
+            if (!derived.exists(sha, required)) {
+                allSizes = false;
+                break;
+            }
+        }
+        ThumbStatus next = allSizes ? ThumbStatus.READY : ThumbStatus.PENDING;
+        if (asset.getThumbStatus() != next) {
+            markThumb(asset, next);
+        }
     }
 
     /** 仓库方法自带只读事务,返回的实体已脱离持久化上下文,必须显式 save 才能落库。 */

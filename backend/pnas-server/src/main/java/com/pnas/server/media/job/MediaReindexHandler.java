@@ -48,7 +48,8 @@ public class MediaReindexHandler implements JobHandler {
 
         int scanned = 0;
         for (Node node : batch) {
-            if (node.getKind() != Node.Kind.FILE) {
+            // 回收站中的节点不重建索引(仍保留既有 media_assets,读取侧再按 ACL/回收站过滤)
+            if (node.getKind() != Node.Kind.FILE || node.getTrashedAt() != null) {
                 continue;
             }
             var latest = versions.findTopByNodeIdOrderByVersionNoDesc(node.getId());
