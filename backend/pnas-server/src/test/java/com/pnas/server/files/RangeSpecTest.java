@@ -2,7 +2,6 @@ package com.pnas.server.files;
 
 import com.pnas.server.common.error.BusinessException;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,8 +37,10 @@ class RangeSpecTest {
     @Test
     void outOfBoundsStartIs416() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=5000-", 1000))
-            .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("Range");
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.status().value()).isEqualTo(416);
+                assertThat(e).hasMessageContaining("Range");
+            });
     }
 
     @Test
@@ -58,47 +59,54 @@ class RangeSpecTest {
     @Test
     void bareStartOutOfBoundsIs416() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=5000", 1000))
-            .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("Range");
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.status().value()).isEqualTo(416);
+                assertThat(e).hasMessageContaining("Range");
+            });
     }
 
     @Test
     void bareNonNumericStartIs400() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=abc", 1000))
-            .isInstanceOf(BusinessException.class);
+            .isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.status().value()).isEqualTo(400));
     }
 
     @Test
     void nonBytesUnitIs400() {
         assertThatThrownBy(() -> RangeSpec.parse("items=0-1", 1000))
-            .isInstanceOf(BusinessException.class);
+            .isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.status().value()).isEqualTo(400));
     }
 
     @Test
     void multiRangeIs400() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=0-1,4-5", 1000))
-            .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("单段");
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.status().value()).isEqualTo(400);
+                assertThat(e).hasMessageContaining("单段");
+            });
     }
 
     @Test
     void invalidNumberIs400() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=abc-def", 1000))
-            .isInstanceOf(BusinessException.class);
+            .isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.status().value()).isEqualTo(400));
     }
 
     @Test
     void emptySpecIs400() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=", 1000))
             .isInstanceOfSatisfying(BusinessException.class,
-                e -> assertThat(e.status()).isEqualTo(HttpStatus.BAD_REQUEST));
+                e -> assertThat(e.status().value()).isEqualTo(400));
     }
 
     @Test
     void zeroSuffixIs416() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=-0", 1000))
             .isInstanceOfSatisfying(BusinessException.class,
-                e -> assertThat(e.status()).isEqualTo(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+                e -> assertThat(e.status().value()).isEqualTo(416));
     }
 
     @Test
@@ -110,7 +118,7 @@ class RangeSpecTest {
     void endBeforeStartIs416() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=10-5", 1000))
             .isInstanceOfSatisfying(BusinessException.class,
-                e -> assertThat(e.status()).isEqualTo(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+                e -> assertThat(e.status().value()).isEqualTo(416));
     }
 
     @Test

@@ -35,5 +35,9 @@ public abstract class AbstractIntegrationTest {
         r.add("pnas.bootstrap.admin-password", () -> "admin-secret");
         // 测试中关闭周期调度,任务由测试显式同步执行,避免并发干扰断言
         r.add("pnas.jobs.scheduler-enabled", () -> "false");
+        // 月份桶 SQL 用 PostgreSQL 会话 TimeZone(to_char/date_part),而 PgJDBC 只在建连时
+        // 读取 JVM 默认时区;连接池里的旧连接不会跟随测试 @BeforeEach 的时区钉子。
+        // 固定测试基准时区,保证"EXIF 本地墙钟 → 月桶"两端使用同一时区语义。
+        r.add("spring.datasource.hikari.connection-init-sql", () -> "SET TIME ZONE 'Asia/Shanghai'");
     }
 }

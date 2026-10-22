@@ -17,12 +17,16 @@ import com.pnas.server.media.MediaTimelineService.TimelineItem;
 import com.pnas.server.media.MediaTimelineService.YearMonths;
 import com.pnas.server.media.domain.MediaKind;
 import com.pnas.server.media.testfixtures.TestImages;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.ByteArrayInputStream;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.TimeZone;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,6 +51,24 @@ class MediaTimelineServiceTest extends AbstractIntegrationTest {
     @Autowired UserRepository users;
     @Autowired AclService acls;
     @Autowired GroupService groupService;
+
+    private TimeZone originalZone;
+
+    /**
+     * EXIF 墙钟按 JVM 默认时区解释;宿主默认 UTC 时"本地月桶"用例会退化成 UTC 进 UTC 出。
+     * 钉死 Asia/Shanghai 后,2026-06-01T00:30 的 EXIF 必须落成 2026-05-31T16:30Z。
+     * (PostgreSQL 会话时区在测试基类里同样固定为 Asia/Shanghai,两端语义一致。)
+     */
+    @BeforeEach
+    void pinTimezone() {
+        originalZone = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
+    }
+
+    @AfterEach
+    void restoreTimezone() {
+        TimeZone.setDefault(originalZone);
+    }
 
     private SessionPrincipal principal(User u) {
         return new SessionPrincipal(u.getId(), u.getUsername(), u.getRole(), UUID.randomUUID());
@@ -182,8 +204,15 @@ class MediaTimelineServiceTest extends AbstractIntegrationTest {
         uploadPhoto(owner, "2026-05-05T08:00:00");
         uploadPhoto(owner, "2026-05-25T08:00:00");
         // 本地时间月初 00:30(UTC 仍是上个月末):桶必须按本地时区归到 6 月(R16/R13)
-        uploadPhoto(owner, "2026-06-01T00:30:00");
+        var boundary = uploadPhoto(owner, "2026-06-01T00:30:00");
         uploadPhoto(owner, "2026-07-01T08:00:00");
+
+        // 先钉死入库瞬间:00:30 +08:00 = 前一日 16:30Z。若代码用固定 UTC 解释,
+        // 这里会得到 2026-06-01T00:30Z,断言立即失败(不依赖 SQL 会话时区)。
+        var boundaryItem = timeline.timeline(principal(owner), null, 50, MediaKind.IMAGE).stream()
+            .filter(i -> i.assetId().equals(boundary.assetId()))
+            .findFirst().orElseThrow();
+        assertThat(boundaryItem.takenAt()).isEqualTo(Instant.parse("2026-05-31T16:30:00Z"));
 
         var buckets = timeline.buckets(principal(owner), 2026, MediaKind.IMAGE);
 

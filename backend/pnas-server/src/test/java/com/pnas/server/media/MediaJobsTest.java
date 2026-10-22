@@ -6,9 +6,12 @@ import com.pnas.server.blobstore.DerivedStore;
 import com.pnas.server.blobstore.Sha256;
 import com.pnas.server.files.FileVersionRepository;
 import com.pnas.server.files.FilesService;
+import com.pnas.server.files.NodeRepository;
 import com.pnas.server.files.UploadService;
+import com.pnas.server.files.domain.Node;
 import com.pnas.server.iam.UserRepository;
 import com.pnas.server.job.JobService;
+import com.pnas.server.job.domain.Job;
 import com.pnas.server.media.domain.ThumbStatus;
 import com.pnas.server.media.testfixtures.TestImages;
 import org.junit.jupiter.api.Test;
@@ -24,8 +27,11 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -42,6 +48,7 @@ class MediaJobsTest extends AbstractIntegrationTest {
     @Autowired UploadService uploads;
     @Autowired FilesService files;
     @Autowired FileVersionRepository versions;
+    @Autowired NodeRepository nodes;
     @Autowired MediaAssetRepository assets;
     @Autowired DerivedStore derived;
     @Autowired UserRepository users;
@@ -255,9 +262,59 @@ class MediaJobsTest extends AbstractIntegrationTest {
         files.trash(new SessionPrincipal(admin.getId(), admin.getUsername(), admin.getRole(),
             UUID.randomUUID()), built.nodeId());
 
+        // 正向对照:同一轮重建里必须真实遍历到一个正常的兄弟文件。
+        // 否则"回收站资产不存在"这一条会被 no-op 重建假通过。
+        var live = upload("live-" + UUID.randomUUID() + ".jpg", TestImages.plainJpeg(120, 90));
+        drainJobs();
+        long liveScansBefore = scanJobsFor(live.versionId());
+
         jobs.enqueue("media.reindex", Map.of());
         drainJobs();
 
         assertThat(assets.findByFileVersionId(built.versionId())).isEmpty();
+        assertThat(scanJobsFor(live.versionId()))
+            .as("重建必须为新上传的兄弟文件再入队 media.scan")
+            .isGreaterThan(liveScansBefore);
+        assertThat(assets.findByFileVersionId(live.versionId()))
+            .as("正向对照资产仍然存在(重建不是 no-op)")
+            .isPresent();
+    }
+
+    @Test
+    void reindexToleratesFileNodeWithoutVersionAndStillScansSibling() throws Exception {
+        var valid = upload("robust-" + UUID.randomUUID() + ".jpg", TestImages.plainJpeg(120, 90));
+        drainJobs();
+        long validScansBefore = scanJobsFor(valid.versionId());
+
+        // 纯 FILE 节点,没有任何 file_versions 行:重建遍历到它时 findTopByNodeId... 返回空。
+        // 这必须只是跳过该节点,不能让整批重建失败/中断。
+        var admin = users.findByUsername("admin").orElseThrow();
+        var home = files.ensureUserHome(admin);
+        Node orphan = nodes.save(Node.file(admin, home, "orphan-" + UUID.randomUUID() + ".bin"));
+
+        Set<UUID> jobsBefore = jobs.list(null).stream().map(Job::getId).collect(Collectors.toSet());
+        jobs.enqueue("media.reindex", Map.of());
+        drainJobs();
+
+        // 重建可能因满批而链式入队,逐批检查:不得有失败批次,且总 scanned ≥ 1
+        var reindexJobs = jobs.list(null).stream()
+            .filter(j -> !jobsBefore.contains(j.getId()))
+            .filter(j -> "media.reindex".equals(j.getType()))
+            .toList();
+        assertThat(reindexJobs).isNotEmpty();
+        assertThat(reindexJobs).allSatisfy(j ->
+            assertThat(j.getState()).as("重建批次不应因无版本节点而失败").isEqualTo(Job.SUCCESS));
+        long scanned = reindexJobs.stream()
+            .map(Job::getResult)
+            .filter(Objects::nonNull)
+            .mapToLong(r -> ((Number) r.getOrDefault("scanned", 0)).longValue())
+            .sum();
+        assertThat(scanned).as("重建仍应扫描到有效兄弟节点").isGreaterThanOrEqualTo(1);
+
+        assertThat(scanJobsFor(valid.versionId())).isGreaterThan(validScansBefore);
+        assertThat(assets.findByFileVersionId(valid.versionId())).isPresent();
+        assertThat(assets.findAll().stream()
+            .filter(a -> a.getNodeId().equals(orphan.getId()))
+            .count()).as("无版本节点不应产生资产").isZero();
     }
 }

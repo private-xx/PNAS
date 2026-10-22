@@ -20,9 +20,13 @@ import org.springframework.test.web.servlet.RequestBuilder;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.Year;
+import java.time.YearMonth;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ConcurrentModificationException;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -79,12 +83,23 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
         return name;
     }
 
-    /** 管理员上传一张带 EXIF 的照片并跑完媒体任务,返回 assetId。 */
-    private String uploadPhotoAndIndex(Instant taken) throws Exception {
+    private record IndexedPhoto(String assetId, byte[] content) {}
+
+    /** 管理员上传一张带 EXIF 的照片并跑完媒体任务,返回 assetId 与上传的原始字节。 */
+    private IndexedPhoto uploadPhotoAndIndex(Instant taken) throws Exception {
         byte[] jpeg = TestImages.jpegWithExif(LocalDateTime.ofInstant(taken, ZoneOffset.UTC),
             39.9, 116.4, 1, 640, 480);
         String name = "api-" + UUID.randomUUID() + ".jpg";
-        return assetIdByName(login("admin", "admin-secret"), uploadAndIndex(name, jpeg));
+        return new IndexedPhoto(assetIdByName(login("admin", "admin-secret"), uploadAndIndex(name, jpeg)),
+            jpeg);
+    }
+
+    /**
+     * 上传一张无 EXIF 的 JPEG:taken_at 回退到版本写入时间(即"刚创建",落在当前月),
+     * 用于给月份桶断言提供确定的当月资产,而不是依赖测试库里的历史数据。
+     */
+    private void uploadCurrentMonthAsset() throws Exception {
+        uploadAndIndex("api-now-" + UUID.randomUUID() + ".jpg", TestImages.plainJpeg(32, 24));
     }
 
     /** 按文件名在时间线里定位 assetId(时间线按 taken_at 排序,不能假定新上传就在首尾)。 */
@@ -147,7 +162,13 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void timelineAndThumbAndEtagWork() throws Exception {
-        String assetId = uploadPhotoAndIndex(Instant.parse("2026-06-01T10:00:00Z"));
+        var photo = uploadPhotoAndIndex(Instant.parse("2026-06-01T10:00:00Z"));
+        String assetId = photo.assetId();
+        // 本月桶必须是"刚创建"的资产撑起来的:额外上传 4 张无 EXIF 的 JPEG,
+        // taken_at 回退到版本写入时间(当前时刻),从而不依赖测试库里的历史数据。
+        for (int i = 0; i < 4; i++) {
+            uploadCurrentMonthAsset();
+        }
         var auth = login("admin", "admin-secret");
 
         mvc.perform(get("/api/v1/media/timeline").header("Cookie", auth.cookie()))
@@ -191,20 +212,70 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
 
         // 图片内容:按版本 MIME / 文件名推断应为 image/jpeg,可 inline 展示
         var imageContent = performStreaming(get("/api/v1/media/assets/{id}/content", assetId)
-                .header("Cookie", auth.cookie()), null);
+                .header("Cookie", auth.cookie()), photo.content());
         assertThat(imageContent.getStatus()).isEqualTo(200);
         assertThat(imageContent.getHeader("Content-Type")).isEqualTo("image/jpeg");
         assertThat(imageContent.getHeader("Accept-Ranges")).isEqualTo("bytes");
         assertThat(imageContent.getHeader("Content-Disposition")).isEqualTo("inline");
         assertThat(imageContent.getHeader("Content-Range")).isNull();
+        // 内容必须是完整的上传字节,不能只满足于"有响应/非空"(流式竞态下可能拿到空 body)
+        assertThat(imageContent.getHeader("Content-Length"))
+            .isEqualTo(String.valueOf(photo.content().length));
+        assertThat(imageContent.getContentLengthLong()).isEqualTo(photo.content().length);
+        assertThat(imageContent.getContentAsByteArray()).isEqualTo(photo.content());
+        assertThat(imageContent.getContentAsByteArray()[0]).isEqualTo((byte) 0xFF);
+        assertThat(imageContent.getContentAsByteArray()[1]).isEqualTo((byte) 0xD8);
 
-        // 相册日期视图与月份桶均为 JSON 数组
-        mvc.perform(get("/api/v1/media/albums/dates").header("Cookie", auth.cookie()))
+        // 相册日期视图与月份桶必须有真实内容:仅 isArray() 会让空数组通过
+        // 月份桶按 PostgreSQL 会话时区分组(测试基类固定 Asia/Shanghai),这里用同一时区取"当前月"
+        var bucketZone = ZoneId.of("Asia/Shanghai");
+        int currentYear = Year.now(bucketZone).getValue();
+        String currentPeriod = YearMonth.now(bucketZone).toString();
+        String bucketsJson = mvc.perform(get("/api/v1/media/timeline/buckets")
+                .param("year", String.valueOf(currentYear))
+                .param("kind", "IMAGE")
+                .header("Cookie", auth.cookie()))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$").isArray());
-        mvc.perform(get("/api/v1/media/timeline/buckets").header("Cookie", auth.cookie()))
+            .andReturn().getResponse().getContentAsString();
+        List<Number> counts = JsonPath.read(bucketsJson, "$[*].count");
+        long bucketSum = counts.stream().mapToLong(Number::longValue).sum();
+        assertThat(bucketSum)
+            .as("当前年月份桶应包含本用例刚创建的 4 张当月图片")
+            .isGreaterThanOrEqualTo(4);
+        List<String> periods = JsonPath.read(bucketsJson, "$[*].period");
+        assertThat(periods).as("当前月桶").contains(currentPeriod);
+
+        String albumsJson = mvc.perform(get("/api/v1/media/albums/dates")
+                .header("Cookie", auth.cookie()))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$").isArray());
+            .andReturn().getResponse().getContentAsString();
+        List<Map<String, Object>> albums = JsonPath.read(albumsJson, "$");
+        assertThat(albums).as("相册日期视图").isNotEmpty();
+        assertThat(albums).extracting(a -> ((Number) a.get("year")).intValue())
+            .contains(currentYear);
+        List<String> albumPeriods = JsonPath.read(albumsJson, "$[*].months[*].period");
+        assertThat(albumPeriods).as("当前年份应至少有一个月桶").contains(currentPeriod);
+    }
+
+    @Test
+    void heicNamedUploadHasSkippedThumbsAndThumbEndpointIs404() throws Exception {
+        var auth = login("admin", "admin-secret");
+        // 内容是合法 JPEG,但扩展名是 .heic:入库认得是图片并置 SKIPPED(不尝试解码),
+        // 因此缩略图端点必须以 thumb_unsupported 契约返回 404,而不是 500/空响应。
+        byte[] jpeg = TestImages.jpegWithExif(LocalDateTime.of(2026, 6, 3, 10, 0),
+            1.0, 2.0, 1, 64, 48);
+        String assetId = assetIdByName(auth,
+            uploadAndIndex("api-skip-" + UUID.randomUUID() + ".heic", jpeg));
+
+        mvc.perform(get("/api/v1/media/assets/{id}", assetId).header("Cookie", auth.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.kind").value("IMAGE"))
+            .andExpect(jsonPath("$.thumbStatus").value("SKIPPED"));
+
+        mvc.perform(get("/api/v1/media/assets/{id}/thumb", assetId)
+                .param("size", "256").header("Cookie", auth.cookie()))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("thumb_unsupported"));
     }
 
     @Test
@@ -228,7 +299,7 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void memberCannotSeeOrFetchOthersMedia() throws Exception {
-        String assetId = uploadPhotoAndIndex(Instant.parse("2026-06-02T10:00:00Z"));
+        String assetId = uploadPhotoAndIndex(Instant.parse("2026-06-02T10:00:00Z")).assetId();
         String member = "media-bob-" + UUID.randomUUID().toString().substring(0, 8);
         userService.createMember(member, "Bob", "secret123");
         var bob = login(member, "secret123");
