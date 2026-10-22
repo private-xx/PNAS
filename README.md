@@ -54,8 +54,6 @@ bash scripts/perf-m3-timeline.sh  http://localhost:8080   # 可选:1000 条时�
 
 > Maven 直连私有镜像不可达时,使用仓库内的 `.tools/maven-settings.xml`(阿里云公共镜像 + 本地仓库,见 `docs/progress.md`)。
 
-> GitHub 访问慢时启动 Clash Verge 即可:本机 git 已**显式**配置 `github.com → http://127.0.0.1:7897`,只要应用(内核)在运行就生效,**无需在首页开启「系统代理」**——该开关只影响依赖系统网络设置的工具(浏览器、npm 等)。代理未运行时可临时直连:`git -c 'http.https://github.com/.proxy=' ...`。
-
 ## 文档
 
 | 文档 | 说明 |
