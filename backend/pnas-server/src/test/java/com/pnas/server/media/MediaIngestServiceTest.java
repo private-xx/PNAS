@@ -13,6 +13,8 @@ import com.pnas.server.media.domain.MediaKind;
 import com.pnas.server.media.domain.ThumbStatus;
 import com.pnas.server.media.domain.TakenAtSource;
 import com.pnas.server.media.testfixtures.TestImages;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -24,9 +26,9 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.TimeZone;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +42,23 @@ class MediaIngestServiceTest extends AbstractIntegrationTest {
     @Autowired FilesService files;
     @Autowired FileVersionRepository versions;
     @Autowired UserRepository users;
+
+    private TimeZone originalZone;
+
+    /**
+     * EXIF DateTimeOriginal 是无时区本地墙钟,按 JVM 默认时区解释。宿主 JVM 若是 UTC,
+     * "墙钟进/UTC 出"会让固定 UTC 的实现也通过;钉死 Asia/Shanghai 才能验证本地墙钟语义。
+     */
+    @BeforeEach
+    void pinTimezone() {
+        originalZone = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
+    }
+
+    @AfterEach
+    void restoreTimezone() {
+        TimeZone.setDefault(originalZone);
+    }
 
     private record Built(UUID nodeId, UUID versionId) {}
 
@@ -57,9 +76,10 @@ class MediaIngestServiceTest extends AbstractIntegrationTest {
     @Test
     void ingestsJpegWithExifAndFallsBackToMtimeWhenMissing() throws Exception {
         var admin = users.findByUsername("admin").orElseThrow();
-        Instant taken = Instant.parse("2026-03-01T10:20:30Z");
-        // EXIF DateTimeOriginal 是无时区本地墙钟时间(R13):按 JVM 默认时区解释后应还原为 taken
-        LocalDateTime wallClock = LocalDateTime.ofInstant(taken, ZoneId.systemDefault());
+        // EXIF DateTimeOriginal 是无时区本地墙钟时间(R13):Asia/Shanghai 下 10:20:30 = 02:20:30Z。
+        // 期望值写死具体瞬间,固定 UTC 解释会得到 10:20:30Z 而立即失败。
+        LocalDateTime wallClock = LocalDateTime.parse("2026-03-01T10:20:30");
+        Instant expectedTakenAt = Instant.parse("2026-03-01T02:20:30Z");
 
         // 有 EXIF:拍摄时间来自 EXIF,状态 PENDING(可生成缩略图)
         var withExif = upload(admin, "exif-" + UUID.randomUUID() + ".jpg",
@@ -68,7 +88,7 @@ class MediaIngestServiceTest extends AbstractIntegrationTest {
         var a1 = assets.findByFileVersionId(withExif.versionId()).orElseThrow();
         assertThat(r1.kind()).isEqualTo(MediaKind.IMAGE);
         assertThat(a1.getTakenAtSource()).isEqualTo(TakenAtSource.EXIF);
-        assertThat(a1.getTakenAt()).isEqualTo(taken);
+        assertThat(a1.getTakenAt()).isEqualTo(expectedTakenAt);
         assertThat(a1.getWidth()).isEqualTo(800);
         assertThat(a1.getThumbStatus()).isEqualTo(ThumbStatus.PENDING);
 
