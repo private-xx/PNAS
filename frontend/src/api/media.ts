@@ -53,6 +53,7 @@ export async function listTimeline(params: {
   return response.data
 }
 
+/** 年/月桶计数。reserved: 年/月跳转(M5) — 当前时间线不消费,仅保留接口。 */
 export async function listBuckets(year: number, kind?: MediaKind | null): Promise<PeriodCount[]> {
   const query: Record<string, unknown> = { year }
   if (kind) query.kind = kind

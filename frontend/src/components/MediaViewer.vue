@@ -8,6 +8,9 @@ const index = defineModel<number>('index', { default: -1 })
 
 const rotation = ref(0)
 const highResReady = ref(false)
+/** 原图 / 视频加载失败:改用降级面板,避免舞台空白。 */
+const imageError = ref(false)
+const videoError = ref(false)
 const detail = ref<mediaApi.AssetDetail | null>(null)
 /** 防止快速翻页时旧请求的详情覆盖当前项。 */
 let detailToken = 0
@@ -23,6 +26,8 @@ const visible = computed({
 watch(current, (item) => {
   rotation.value = 0
   highResReady.value = false
+  imageError.value = false
+  videoError.value = false
   detail.value = null
   const token = ++detailToken
   if (!item) return
@@ -102,46 +107,72 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 <template>
   <el-dialog v-model="visible" width="90vw" top="4vh" :title="current?.name" destroy-on-close>
     <div v-if="current" class="viewer">
-      <video
-        v-if="current.kind === 'VIDEO'"
-        :src="mediaApi.mediaContentUrl(current.assetId)"
-        controls
-        preload="metadata"
-        playsinline
-        class="stage"
-      />
+      <template v-if="current.kind === 'VIDEO'">
+        <video
+          v-if="!videoError"
+          :key="current.assetId"
+          :src="mediaApi.mediaContentUrl(current.assetId)"
+          controls
+          preload="metadata"
+          playsinline
+          class="stage"
+          @error="videoError = true"
+        />
+        <div v-else class="stage fallback">
+          <span>该格式可能需 M5 转码后播放</span>
+          <a
+            class="download-btn"
+            :href="mediaApi.mediaContentUrl(current.assetId)"
+            :download="current.name"
+          >下载视频</a>
+        </div>
+      </template>
       <div v-else class="stage image-stage">
-        <img
-          v-if="current.thumbStatus === 'READY'"
-          :src="mediaApi.thumbUrl(current.assetId, 512)"
-          :style="imageStyle"
-          class="thumb-layer"
-          alt=""
-        />
-        <img
-          v-if="highResReady || current.thumbStatus !== 'READY'"
-          :src="mediaApi.mediaContentUrl(current.assetId)"
-          :style="imageStyle"
-          :class="current.thumbStatus === 'READY' ? 'full-layer' : 'full-inline'"
-          alt=""
-          @load="highResReady = true"
-        />
-        <img
-          v-else
-          :src="mediaApi.mediaContentUrl(current.assetId)"
-          class="hidden-preload"
-          alt=""
-          @load="highResReady = true"
-        />
+        <div v-if="imageError" class="fallback">
+          <span>该图片暂无法预览</span>
+          <a
+            class="download-btn"
+            :href="mediaApi.mediaContentUrl(current.assetId)"
+            :download="current.name"
+          >下载原图</a>
+        </div>
+        <template v-else>
+          <img
+            v-if="current.thumbStatus === 'READY'"
+            :src="mediaApi.thumbUrl(current.assetId, 512)"
+            :style="imageStyle"
+            class="thumb-layer"
+            alt=""
+          />
+          <img
+            v-if="highResReady || current.thumbStatus !== 'READY'"
+            :src="mediaApi.mediaContentUrl(current.assetId)"
+            :style="imageStyle"
+            :class="current.thumbStatus === 'READY' ? 'full-layer' : 'full-inline'"
+            alt=""
+            @load="highResReady = true"
+            @error="imageError = true"
+          />
+          <img
+            v-else
+            :src="mediaApi.mediaContentUrl(current.assetId)"
+            class="hidden-preload"
+            alt=""
+            @load="highResReady = true"
+            @error="imageError = true"
+          />
+        </template>
       </div>
 
       <div v-if="metaText" class="meta">{{ metaText }}</div>
       <div class="actions">
         <el-button :disabled="index <= 0" @click="step(-1)">上一张</el-button>
         <el-button v-if="current.kind !== 'VIDEO'" @click="rotation = (rotation + 90) % 360">旋转</el-button>
-        <a :href="mediaApi.mediaContentUrl(current.assetId)" :download="current.name">
-          <el-button>{{ current.kind === 'VIDEO' ? '下载视频' : '下载原图' }}</el-button>
-        </a>
+        <a
+          class="download-btn"
+          :href="mediaApi.mediaContentUrl(current.assetId)"
+          :download="current.name"
+        >{{ current.kind === 'VIDEO' ? '下载视频' : '下载原图' }}</a>
         <el-button :disabled="index >= items.length - 1" @click="step(1)">下一张</el-button>
       </div>
       <div v-if="current.kind === 'VIDEO' && durationMs === null" class="note">
@@ -203,5 +234,42 @@ video.stage {
 .note {
   color: #909399;
   font-size: 0.8rem;
+}
+.fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  color: #909399;
+  font-size: 0.9rem;
+}
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 15px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background: #fff;
+  color: #606266;
+  font-size: 14px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    color 0.1s,
+    border-color 0.1s,
+    background-color 0.1s;
+}
+.download-btn:hover {
+  color: #409eff;
+  border-color: #c6e2ff;
+  background: #ecf5ff;
+}
+.download-btn:focus-visible {
+  outline: 2px solid #409eff;
+  outline-offset: 1px;
 }
 </style>

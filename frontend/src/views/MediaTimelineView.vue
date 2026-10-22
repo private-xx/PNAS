@@ -4,6 +4,8 @@ import * as mediaApi from '@/api/media'
 import { errorMessage } from '@/api/http'
 import MediaViewer from '@/components/MediaViewer.vue'
 
+/** 年/月跳转(见 api/media.ts#listBuckets)按决策延后到 M5;M3 只做连续时间线 + 日期相册入口。 */
+
 type KindFilter = '' | mediaApi.MediaKind
 
 const items = ref<mediaApi.TimelineItem[]>([])
@@ -16,6 +18,9 @@ const kindFilter = ref<KindFilter>('')
 const viewerIndex = ref(-1)
 /** 过滤条件切换后,丢弃旧请求的结果(避免图片/视频结果串页)。 */
 let generation = 0
+/** 组件卸载后,忽略在途分页响应(不再写状态)。 */
+let alive = true
+const PAGE_SIZE = 60
 
 const activeKind = computed<mediaApi.MediaKind | null>(() =>
   kindFilter.value === '' ? null : kindFilter.value,
@@ -54,22 +59,22 @@ async function loadMore() {
   error.value = ''
   const gen = generation
   try {
-    const page = await mediaApi.listTimeline({ cursor: cursor.value, limit: 60, kind: activeKind.value })
-    if (gen !== generation) return
-    if (page.length === 0) {
-      finished.value = true
-    } else {
+    const page = await mediaApi.listTimeline({ cursor: cursor.value, limit: PAGE_SIZE, kind: activeKind.value })
+    if (!alive || gen !== generation) return
+    if (page.length > 0) {
       items.value.push(...page)
       const last = page[page.length - 1]
       cursor.value = `${last.takenAt}|${last.assetId}`
     }
+    // 不足一页即最后一页:直接收口,避免再发一次必然为空的请求。
+    if (page.length < PAGE_SIZE) finished.value = true
   } catch (e) {
-    if (gen === generation) {
+    if (alive && gen === generation) {
       failed.value = true
       error.value = errorMessage(e, '加载时间线失败')
     }
   } finally {
-    if (gen === generation) loading.value = false
+    if (alive && gen === generation) loading.value = false
   }
 }
 
@@ -113,7 +118,10 @@ onMounted(() => {
   void loadMore()
   window.addEventListener('scroll', onScroll)
 })
-onUnmounted(() => window.removeEventListener('scroll', onScroll))
+onUnmounted(() => {
+  alive = false
+  window.removeEventListener('scroll', onScroll)
+})
 </script>
 
 <template>
@@ -182,9 +190,14 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   flex: 1;
 }
 .day-title {
-  margin: 1rem 0 0.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 0.75rem 0 0.5rem;
   font-size: 0.95rem;
   color: #606266;
+  background: var(--el-bg-color, #fff);
 }
 .grid {
   display: grid;
