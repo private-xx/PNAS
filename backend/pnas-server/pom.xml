@@ -72,6 +72,13 @@
       <scope>runtime</scope>
     </dependency>
 
+    <!-- 媒体元数据 -->
+    <dependency>
+      <groupId>com.drewnoakes</groupId>
+      <artifactId>metadata-extractor</artifactId>
+      <version>2.19.0</version>
+    </dependency>
+
     <!-- 测试 -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

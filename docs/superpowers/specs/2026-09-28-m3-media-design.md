@@ -48,6 +48,7 @@
 | **D6** | 本机 Maven 用绝对路径 `/Users/xiao/hui/soft/maven3.8/bin/mvn`(3.8.1),配 `.tools/maven-settings.xml` 与 `.tools/jdk-21.0.12.1+1` | 本 shell PATH 极简,`mvn` 不在 PATH;经镜像源可拉依赖 |
 | **D7** | 自动入库范围:**所有**写入完成的图片/视频,时间线按 ACL 过滤;另提供管理员「重建媒体索引」回填既有文件 | 与 FR-MEDIA-07/SC-2 对齐,零操作;管理员可随时重扫 |
 | **D8** | 相册:M3 **只做日期相册**;地点相册、手动相册推迟 | 用户确认;GPS 仍提取入库 |
+| **D9** | EXIF 拍摄时间按 **JVM 默认时区**解释(本地墙上时间) | 单时区家庭 NAS 下时间线按本地日期分组正确;多时区留 M5 |
 
 ## 4. 数据模型(迁移 `V3__media.sql`)
 
@@ -100,6 +101,7 @@ media/
 
 - `MediaTypes.isMedia(name, mime)` → `IMAGE|VIDEO|NONE`;`canThumbnail(kind, name)` → JPEG/PNG/GIF/BMP/TIFF=true,HEIC/WEBP/视频=false(SKIPPED)。
 - `ExifReader.read(InputStream)` → `(takenAt, orientation, width, height, gpsLat, gpsLon)`;解析失败不抛业务异常,返回空结果(降级见 §7)。
+  - **时区语义(R13)**:EXIF 无时区,拍摄时间按 **JVM 默认时区**解释为本地墙上时间(家庭单时区;可配置时区留 M5);测试用 `ZoneId.systemDefault()` 固定期望值并覆盖「午夜附近仍落在同一本地日期」。
 - `ThumbnailService.generate(versionSha, size)`:
   - 目标路径 `derived/thumbs/<sha前2>/<versionSha>-<size>.jpg`;**已存在即返回**(幂等)
   - 解码用 `ImageIO.read`;Orientation 5/6/7/8 做 90°/180° 旋转;长边等比缩放到 size(不放大);JPEG 质量 0.82
@@ -107,6 +109,7 @@ media/
 - `MediaIngestService.ingest(nodeId, versionId)`:读版本 → 判定类型 → 提取元数据 → upsert(以 `file_version_id` 幂等)→ 返回是否需要缩略图
 - `MediaTimelineService`:
   - 可见性:PostgreSQL **递归 CTE** 从「我的 home 根 + 我所属组的共享根 + 显式授予我/我的组的节点」向下展开 `nodes`,得到我可读节点集,再 join `media_assets` 且 `nodes.trashed_at is null`
+  - **可见性边界(R31)**:ACL 授权根的子树的**列表**按「授权型根」整棵展开,不折叠后代 `DENY`/`inherited=false`;后者只在单条读取(`requireReadable`)时生效,因此可能出现「列表可见、打开 404」的单向过度可见。该方向不产生跨用户泄漏(未共享的子树永不可见);M3 无共享 UI,接受此边界,**M5 引入共享 UI 时**必须把 DENY/inherited 链折叠进 CTE 或改为逐节点判定。
   - 分页:游标 `(taken_at, id)` 倒序,`limit` 默认 60、上限 200;**不用 offset**(避免深分页退化与插入抖动)
   - 桶:`date_trunc('month'|'day', taken_at)` 聚合计数,同样受可见性过滤
 - **触发点**:`UploadService.complete()` 成功后 `jobService.enqueue("media.scan", {nodeId, versionId})`;入队失败不影响上传成功(仅记日志,等待 reindex 兜底)
@@ -116,7 +119,7 @@ media/
 | type | 载荷 | 幂等性 | 备注 |
 |---|---|---|---|
 | `media.scan` | `{nodeId, versionId}` | 以 `file_version_id` upsert 结果一致 | 非媒体文件 → 直接完成(不产生记录) |
-| `media.thumb` | `{versionId, size}` | 目标文件存在即跳过 | 仅当 `canThumbnail` |
+| `media.thumb` | `{nodeId, versionId, size}` | 目标文件存在即跳过;READY 需 256+512 同时存在 | 仅当 `canThumbnail`;handler 读取 EXIF Orientation 后再渲染(R17) |
 | `media.reindex` | `{cursor?}` | 遍历所有 FILE 节点,重复执行结果一致 | ADMIN 触发;分批(每批 200)自链式入队,避免长任务 |
 
 ## 6. API 契约(`/api/v1`)
@@ -128,7 +131,7 @@ media/
 | GET | `/media/assets/{id}` | 详情(含 `takenAtSource`、尺寸、时长、GPS 是否存在) | 同上 |
 | GET | `/media/assets/{id}/thumb?size=256\|512` | JPEG 字节;`ETag: "<versionSha>-<size>"`,`Cache-Control: private, max-age=604800`;不支持 → 404 `thumb_unsupported` | 同上 |
 | GET | `/media/assets/{id}/content` | 原图/视频字节,**支持 Range**(复用 M2 逻辑) | 同上 |
-| GET | `/media/albums/dates` | `[{year, months:[{month, count}]}]` 日期相册页的聚合视图 | 同上 |
+| GET | `/media/albums/dates` | `[{year, months:[{period:"YYYY-MM", count}]}]`(实现字段为 `period`) | 同上 |
 | POST | `/media/reindex` | 触发重建(202 + jobId) | ADMIN |
 
 任务中心复用 M2 已有接口:`GET /jobs?state=`、`POST /jobs/{id}/retry`、`POST /jobs/{id}/cancel`、`GET /jobs/{id}`。
@@ -186,9 +189,11 @@ media/
 - [ ] 后端全套件(含 M2 的 47 项)保持绿色;新增媒体测试全绿
 - [ ] 前端 `npm run build` 通过;时间线/查看器/相册/任务中心四个视图可用
 - [ ] 1000 张 fixture 的时间线首屏实测 ≤2s 并记录口径(预热后、局域网参考浏览器)
-- [ ] 交付与裁决记入 `docs/`(设计裁决 D1–D8、遗留项)
+- [ ] 交付与裁决记入 `docs/`(设计裁决 D1–D9、遗留项)
 
 ## 12. 风险与后续衔接
+
+**已接受边界(M3,已验证/已记录)**:①并发同版本 ingest 先查后插可能撞 `file_version_id` 唯一约束 → 任务瞬时 FAILED,由队列重试自愈(R32);②`/content` 取节点**最新版本**字节,而详情/缩略图绑定**索引版本**,覆盖写后未重扫前两者可能短暂不一致;③`taken_at_source=MTIME` 实际取版本创建时间(上传时间),非文件 mtime;④HEIC 改名成 JPG 后再 reindex 仍为 `SKIPPED`;⑤验收脚本的"MP4"是占位字节、月桶仅覆盖单月(真实时长与多月分桶由单元/集成测试覆盖)。
 
 | 风险 | 缓解 |
 |---|---|

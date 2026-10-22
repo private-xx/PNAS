@@ -24,7 +24,7 @@ class PackageArchitectureTest {
         .that().haveSimpleNameEndingWith("Controller")
         .should().resideInAnyPackage(
             "com.pnas.server.web..", "com.pnas.server.auth..", "com.pnas.server.iam..",
-            "com.pnas.server.files..", "com.pnas.server.job..");
+            "com.pnas.server.files..", "com.pnas.server.job..", "com.pnas.server.media..");
 
     @ArchTest
     static final ArchRule web_does_not_depend_on_blobstore = noClasses()
@@ -35,7 +35,8 @@ class PackageArchitectureTest {
     static final ArchRule domain_packages_do_not_depend_on_web = noClasses()
         .that().resideInAnyPackage(
             "com.pnas.server.files..", "com.pnas.server.blobstore..", "com.pnas.server.job..",
-            "com.pnas.server.iam..", "com.pnas.server.common..", "com.pnas.server.auth..")
+            "com.pnas.server.iam..", "com.pnas.server.common..", "com.pnas.server.auth..",
+            "com.pnas.server.media..")
         .should().dependOnClassesThat().resideInAPackage(WEB)
         .because("web 是接入层;领域/服务包不得反向依赖(见架构 §4)");
 

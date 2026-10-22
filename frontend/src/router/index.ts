@@ -15,6 +15,9 @@ const router = createRouter({
       name: 'files',
       component: () => import('@/views/FilesView.vue'),
     },
+    { path: '/media', name: 'media', component: () => import('@/views/MediaTimelineView.vue') },
+    { path: '/media/albums', name: 'media-albums', component: () => import('@/views/AlbumsView.vue') },
+    { path: '/admin/jobs', name: 'jobs', component: () => import('@/views/JobsView.vue'), meta: { admin: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
@@ -24,11 +27,16 @@ router.beforeEach(async (to) => {
     return true
   }
   const store = useSessionStore()
-  if (store.isLoggedIn) {
-    return true
+  if (!store.isLoggedIn) {
+    const ok = await store.refresh()
+    if (!ok) {
+      return { name: 'login', query: { redirect: to.fullPath } }
+    }
   }
-  const ok = await store.refresh()
-  return ok ? true : { name: 'login', query: { redirect: to.fullPath } }
+  if (to.meta.admin && !store.isAdmin) {
+    return { name: 'media' }
+  }
+  return true
 })
 
 export default router

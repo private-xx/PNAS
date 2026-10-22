@@ -29,7 +29,8 @@ public enum ErrorCode {
     CHUNK_INVALID("chunk_invalid"),
     CHUNK_MISSING("chunk_missing"),
     UPLOAD_SESSION_INVALID("upload_session_invalid"),
-    TRASH_RESTORE_CONFLICT("trash_restore_conflict");
+    TRASH_RESTORE_CONFLICT("trash_restore_conflict"),
+    THUMB_UNSUPPORTED("thumb_unsupported");
 
     private final String code;
 
