@@ -2,6 +2,7 @@ package com.pnas.server.files;
 
 import com.pnas.server.common.error.BusinessException;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -84,5 +85,39 @@ class RangeSpecTest {
     void invalidNumberIs400() {
         assertThatThrownBy(() -> RangeSpec.parse("bytes=abc-def", 1000))
             .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void emptySpecIs400() {
+        assertThatThrownBy(() -> RangeSpec.parse("bytes=", 1000))
+            .isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.status()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void zeroSuffixIs416() {
+        assertThatThrownBy(() -> RangeSpec.parse("bytes=-0", 1000))
+            .isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.status()).isEqualTo(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+    }
+
+    @Test
+    void singleByteRangeHasLengthOne() {
+        assertThat(RangeSpec.parse("bytes=0-0", 1000).length()).isEqualTo(1);
+    }
+
+    @Test
+    void endBeforeStartIs416() {
+        assertThatThrownBy(() -> RangeSpec.parse("bytes=10-5", 1000))
+            .isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.status()).isEqualTo(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE));
+    }
+
+    @Test
+    void blankHeaderIsWholeFile() {
+        var spec = RangeSpec.parse(" ", 1000);
+        assertThat(spec.ranged()).isFalse();
+        assertThat(spec.start()).isZero();
+        assertThat(spec.length()).isEqualTo(1000);
     }
 }

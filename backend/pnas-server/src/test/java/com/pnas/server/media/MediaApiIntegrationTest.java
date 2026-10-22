@@ -24,6 +24,7 @@ import java.time.ZoneOffset;
 import java.util.ConcurrentModificationException;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItem;
@@ -89,6 +90,7 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
     /** 按文件名在时间线里定位 assetId(时间线按 taken_at 排序,不能假定新上传就在首尾)。 */
     private String assetIdByName(Auth auth, String name) throws Exception {
         String timeline = mvc.perform(get("/api/v1/media/timeline")
+                .param("limit", "200")
                 .header("Cookie", auth.cookie()))
             .andExpect(status().isOk())
             .andReturn().getResponse().getContentAsString();
@@ -101,32 +103,18 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
      * 异步流式响应在 MockMvc 里由 {@code AsyncTaskExecutor} 线程完成 dispatch,与初次
      * dispatch 中 Spring Security 写响应头存在竞态({@code MockHttpServletResponse}
      * 非线程安全)。这是 MockMvc 的已知限制(M2 的 {@code NodesApiIntegrationTest}
-     * 也会偶发),仅对会产生流式响应的请求做有限重试,避免测试基础设施竞态掩盖端点契约。
+     * 也会偶发),仅对 CME 或"空 body"这两个竞态表现做有限重试;状态码/字节内容
+     * 不符时立即返回,由调用方断言失败,避免掩盖真正的截断。
      */
-    private MockHttpServletResponse performStreaming(RequestBuilder request, int expectedStatus)
+    private MockHttpServletResponse performStreaming(RequestBuilder request, byte[] expectedBody)
             throws Exception {
-        return performStreaming(request, expectedStatus, null);
-    }
-
-    private MockHttpServletResponse performStreaming(RequestBuilder request, int expectedStatus,
-                                                     byte[] expectedBody) throws Exception {
         for (int attempt = 1; ; attempt++) {
             try {
                 MockHttpServletResponse response = mvc.perform(request).andReturn().getResponse();
-                byte[] actual = response.getContentAsByteArray();
-                boolean bodyOk = expectedBody == null
-                    ? actual.length > 0
-                    : java.util.Arrays.equals(actual, expectedBody);
-                if (response.getStatus() == expectedStatus && bodyOk) {
-                    return response;
-                }
-                if (attempt >= 5) {
-                    assertThat(response.getStatus()).isEqualTo(expectedStatus);
-                    if (expectedBody == null) {
-                        assertThat(actual).isNotEmpty();
-                    } else {
-                        assertThat(actual).isEqualTo(expectedBody);
-                    }
+                awaitStreamingBody(response);
+                boolean emptyAsyncRace = response.getContentAsByteArray().length == 0
+                    && (expectedBody == null || expectedBody.length > 0);
+                if (!emptyAsyncRace || attempt >= 5) {
                     return response;
                 }
             } catch (Exception e) {
@@ -134,6 +122,17 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
                     throw e;
                 }
             }
+        }
+    }
+
+    /** 等待异步流把响应体写到声明的 Content-Length(MockMvc 的 perform 可能先于异步线程返回)。 */
+    private static void awaitStreamingBody(MockHttpServletResponse response) throws InterruptedException {
+        long declared = response.getContentLengthLong();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (declared > 0
+            && response.getContentAsByteArray().length < declared
+            && System.nanoTime() < deadline) {
+            Thread.sleep(1);
         }
     }
 
@@ -169,8 +168,16 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
             .andExpect(header().string("Cache-Control", "private, max-age=604800"))
             .andReturn();
         String etag = thumb.getResponse().getHeader("ETag");
-        assertThat(etag).isNotBlank();
+        assertThat(etag).matches("\"[0-9a-f]{64}-256\"");
         assertThat(thumb.getResponse().getContentAsByteArray()).isNotEmpty();
+
+        var thumb512 = mvc.perform(get("/api/v1/media/assets/{id}/thumb", assetId)
+                .param("size", "512").header("Cookie", auth.cookie()))
+            .andExpect(status().isOk())
+            .andReturn();
+        String etag512 = thumb512.getResponse().getHeader("ETag");
+        assertThat(etag512).matches("\"[0-9a-f]{64}-512\"");
+        assertThat(etag512).isNotEqualTo(etag);
 
         mvc.perform(get("/api/v1/media/assets/{id}/thumb", assetId)
                 .param("size", "256").header("Cookie", auth.cookie())
@@ -184,11 +191,20 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
 
         // 图片内容:按版本 MIME / 文件名推断应为 image/jpeg,可 inline 展示
         var imageContent = performStreaming(get("/api/v1/media/assets/{id}/content", assetId)
-                .header("Cookie", auth.cookie()), 200);
+                .header("Cookie", auth.cookie()), null);
+        assertThat(imageContent.getStatus()).isEqualTo(200);
         assertThat(imageContent.getHeader("Content-Type")).isEqualTo("image/jpeg");
         assertThat(imageContent.getHeader("Accept-Ranges")).isEqualTo("bytes");
         assertThat(imageContent.getHeader("Content-Disposition")).isEqualTo("inline");
         assertThat(imageContent.getHeader("Content-Range")).isNull();
+
+        // 相册日期视图与月份桶均为 JSON 数组
+        mvc.perform(get("/api/v1/media/albums/dates").header("Cookie", auth.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$").isArray());
+        mvc.perform(get("/api/v1/media/timeline/buckets").header("Cookie", auth.cookie()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$").isArray());
     }
 
     @Test
@@ -221,6 +237,8 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
                 .param("size", "256").header("Cookie", bob.cookie()))
             .andExpect(status().isNotFound());
         mvc.perform(get("/api/v1/media/assets/{id}", assetId).header("Cookie", bob.cookie()))
+            .andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/media/assets/{id}/content", assetId).header("Cookie", bob.cookie()))
             .andExpect(status().isNotFound());
         String timeline = mvc.perform(get("/api/v1/media/timeline").header("Cookie", bob.cookie()))
             .andExpect(status().isOk())
@@ -261,7 +279,8 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
         byte[] expected = new byte[16];
         java.util.Arrays.fill(expected, (byte) 7);
         var ranged = performStreaming(get("/api/v1/media/assets/{id}/content", assetId)
-                .header("Cookie", auth.cookie()).header("Range", "bytes=0-15"), 206, expected);
+                .header("Cookie", auth.cookie()).header("Range", "bytes=0-15"), expected);
+        assertThat(ranged.getStatus()).isEqualTo(206);
         assertThat(ranged.getHeader("Accept-Ranges")).isEqualTo("bytes");
         assertThat(ranged.getHeader("Content-Range")).startsWith("bytes 0-15/");
         assertThat(ranged.getHeader("Content-Type")).startsWith("video/");
@@ -269,10 +288,19 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
         assertThat(ranged.getContentAsByteArray()).isEqualTo(expected);
 
         var full = performStreaming(get("/api/v1/media/assets/{id}/content", assetId)
-                .header("Cookie", auth.cookie()), 200, mp4);
+                .header("Cookie", auth.cookie()), mp4);
+        assertThat(full.getStatus()).isEqualTo(200);
         assertThat(full.getHeader("Content-Range")).isNull();
         assertThat(full.getHeader("Content-Type")).startsWith("video/");
         assertThat(full.getContentAsByteArray()).isEqualTo(mp4);
+
+        // Range 解析错误:越界 416,非 bytes 单位 400(同步异常,不进入流式路径)
+        mvc.perform(get("/api/v1/media/assets/{id}/content", assetId)
+                .header("Cookie", auth.cookie()).header("Range", "bytes=999999-"))
+            .andExpect(status().isRequestedRangeNotSatisfiable());
+        mvc.perform(get("/api/v1/media/assets/{id}/content", assetId)
+                .header("Cookie", auth.cookie()).header("Range", "items=0-1"))
+            .andExpect(status().isBadRequest());
 
         // 视频没有缩略图(fixture 不可解码/或非图片):一律 404
         mvc.perform(get("/api/v1/media/assets/{id}/thumb", assetId)

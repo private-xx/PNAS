@@ -36,18 +36,16 @@ import java.util.UUID;
 public class MediaController {
 
     private final MediaTimelineService timeline;
-    private final MediaAssetRepository assets;
     private final FileVersionRepository versions;
     private final NodeRepository nodes;
     private final DerivedStore derived;
     private final FilesService files;
     private final JobService jobs;
 
-    public MediaController(MediaTimelineService timeline, MediaAssetRepository assets,
-                           FileVersionRepository versions, NodeRepository nodes, DerivedStore derived,
+    public MediaController(MediaTimelineService timeline, FileVersionRepository versions,
+                           NodeRepository nodes, DerivedStore derived,
                            FilesService files, JobService jobs) {
         this.timeline = timeline;
-        this.assets = assets;
         this.versions = versions;
         this.nodes = nodes;
         this.derived = derived;
@@ -131,22 +129,22 @@ public class MediaController {
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader) {
         MediaAsset asset = timeline.requireReadable(me, id);
         var version = versions.findById(asset.getFileVersionId()).orElseThrow();
-        long total = files.sizeOf(me, asset.getNodeId());
-        RangeSpec spec = RangeSpec.parse(rangeHeader, total);
-        var content = files.content(me, asset.getNodeId(), spec.start(), spec.length());
+        long declaredTotal = files.sizeOf(me, asset.getNodeId());
+        RangeSpec spec = RangeSpec.parse(rangeHeader, declaredTotal);
+        var cs = files.content(me, asset.getNodeId(), spec.start(), spec.length());
         StreamingResponseBody body = out -> {
-            try (InputStream in = content.stream()) {
+            try (InputStream in = cs.stream()) {
                 in.transferTo(out);
             }
         };
         var builder = ResponseEntity.status(spec.ranged() ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
-            .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(spec.length()))
+            .contentLength(cs.length())
             .header(HttpHeaders.ACCEPT_RANGES, "bytes")
             .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
             .contentType(contentTypeOf(asset, version));
         if (spec.ranged()) {
             builder.header(HttpHeaders.CONTENT_RANGE,
-                "bytes " + spec.start() + "-" + (spec.start() + spec.length() - 1) + "/" + total);
+                "bytes " + cs.start() + "-" + (cs.start() + cs.length() - 1) + "/" + cs.totalSize());
         }
         return builder.body(body);
     }
