@@ -13,4 +13,7 @@ public interface AclRepository extends JpaRepository<AclEntry, UUID> {
 
     /** 删除某主体(用户/组)的全部授权条目:组被删除时避免悬挂授权。 */
     void deleteByPrincipalTypeAndPrincipalId(AclEntry.PrincipalType principalType, UUID principalId);
+
+    /** 某主体(用户/组)的全部授权条目:时间线据此展开"我可读节点"根集合。 */
+    List<AclEntry> findByPrincipalTypeAndPrincipalId(AclEntry.PrincipalType principalType, UUID principalId);
 }
