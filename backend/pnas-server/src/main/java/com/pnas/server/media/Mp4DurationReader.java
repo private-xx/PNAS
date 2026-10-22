@@ -15,6 +15,7 @@ public class Mp4DurationReader {
 
     private static final Logger log = LoggerFactory.getLogger(Mp4DurationReader.class);
     private static final long MAX_SKIP_BYTES = 64L * 1024 * 1024;
+    private static final long MAX_DURATION_FOR_MS = Long.MAX_VALUE / 1000;
 
     public Long readDurationMs(InputStream in) {
         try {
@@ -39,6 +40,9 @@ public class Mp4DurationReader {
                 if (payload < 0) {
                     return null;
                 }
+                if (payload > MAX_SKIP_BYTES - skipped) {
+                    return null; // 超大前置 box(如 mdat)不整段扫描
+                }
                 data.skipNBytes(payload);
                 skipped += size;
             }
@@ -50,6 +54,7 @@ public class Mp4DurationReader {
     }
 
     private Long readMvhd(DataInputStream data) throws IOException {
+        long skipped = 0;
         while (true) {
             long size = Integer.toUnsignedLong(data.readInt());
             byte[] type = new byte[4];
@@ -64,13 +69,22 @@ public class Mp4DurationReader {
             if ("mvhd".equals(box)) {
                 int version = data.readUnsignedByte();
                 data.skipNBytes(3);                     // flags
+                if (version != 0 && version != 1) {
+                    return null;                        // 未知版本,不做猜测
+                }
                 long timescale;
                 long duration;
                 if (version == 1) {
+                    if (payload < 32) {
+                        return null;                    // 长度不足,避免读到后续 box
+                    }
                     data.skipNBytes(16);                // creation + modification(64 位)
                     timescale = Integer.toUnsignedLong(data.readInt());
                     duration = data.readLong();
                 } else {
+                    if (payload < 20) {
+                        return null;                    // 长度不足,避免读到后续 box
+                    }
                     data.skipNBytes(8);                 // creation + modification(32 位)
                     timescale = Integer.toUnsignedLong(data.readInt());
                     duration = Integer.toUnsignedLong(data.readInt());
@@ -78,12 +92,22 @@ public class Mp4DurationReader {
                 if (timescale <= 0) {
                     return null;
                 }
+                if (duration == 0) {
+                    return null;                        // 0 视为未知时长
+                }
+                if (duration < 0 || duration > MAX_DURATION_FOR_MS) {
+                    return null;                        // 乘法溢出保护
+                }
                 return duration * 1000L / timescale;
             }
             if (payload < 0) {
                 return null;
             }
+            if (payload > MAX_SKIP_BYTES - skipped) {
+                return null;                            // moov 内超大子 box 同样不整段扫描
+            }
             data.skipNBytes(payload);
+            skipped += payload + header;
         }
     }
 }
