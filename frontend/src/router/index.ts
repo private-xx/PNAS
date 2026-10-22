@@ -17,6 +17,7 @@ const router = createRouter({
     },
     { path: '/media', name: 'media', component: () => import('@/views/MediaTimelineView.vue') },
     { path: '/media/albums', name: 'media-albums', component: () => import('@/views/AlbumsView.vue') },
+    { path: '/admin/jobs', name: 'jobs', component: () => import('@/views/JobsView.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
