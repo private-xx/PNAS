@@ -29,6 +29,7 @@
 - **性能(SC-3,1000 张首屏 ≤2s)**:`bash scripts/perf-m3-timeline.sh <BASE>`(首次 T13 于 `:8090`;修复波在隔离库/`:8091` 复测)。口径:psql 直插 1000 条 `media_assets`(绕开上传),`taken_at` 从 `now()` 起按 8h 间隔向过去铺开(1000 条约 11 个月,脚本按实际 min/max 计算跨度)、`thumb_status='READY'`、`indexed_at=now()`,全部复用同一已入库版本的 `manifest_sha256/size_bytes`(blob 与缩略图各一份),只测查询 + 首屏 JSON;端点 `GET /api/v1/media/timeline?limit=60`,3 次预热 + 5 次计时,每次断言 HTTP 200 后取 `curl time_total` 中位数。
   - 实测(T13):`[0.029968, 0.029064, 0.027618, 0.028661, 0.027169]s`(N=1000,返回 60 条),**中位数 0.0287s**;**修复波复测**:同样 N=1000,5 次计时**中位数 0.0217s**(`PNAS_PERF_KEEP=1` 复跑 0.0172s、清理后 0.0179s),均判定 ✅ ≤2s(本机单实例、PostgreSQL 16 容器、库与数据盘同机;正式部署需按其硬件复测)。
 - **环境复现**:Postgres 容器 `pnas-acc-db`(host 55432,`acc/acc`,`pnas_m3`);`PNAS_JOBS_SCHEDULER_ENABLED=true`(否则媒体任务不会被领取);服务 `--server.port=8090`;Java 21 与 Maven 见下方工具链。
+- **网络(GitHub)**:访问慢时启动 Clash Verge(`open -a "Clash Verge"`);本仓库 git 已配置 `http.https://github.com/.proxy=http://127.0.0.1:7897`,代理运行时推送/拉取秒连。若代理未运行且仍想直连,用 `git -c 'http.https://github.com/.proxy=' ...` 绕过(直连不稳定,失败可重试)。
 - **已知限制与延后项(M3 接受,M5 收敛)**:
   - HEIC/HEIF/WebP/AVIF 可入库但 `thumb_status='SKIPPED'`(纯 Java 无法解码),缩略图待 M5;
   - 视频 `thumb_status='SKIPPED'`、无封面/海报帧,播放直接走 Range(`thumb?size=` 对视频返回 404 属预期);
