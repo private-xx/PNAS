@@ -9,7 +9,7 @@
 | M0 | 需求分析 | ✅ [requirements-analysis.md](requirements-analysis.md) v0.3 已确认(M0 + 严谨化评审 M0-R2,2026) |
 | M1 | 架构设计 | ✅ [architecture-design.md](architecture-design.md) v0.3,ADR-01~12 全部确认,与需求 v0.3 同步 |
 | M2 | MVP 实现 | ✅ **已合并进 `main`**(PR #1,合并提交 `dc5afe5`):14 任务全部实现并逐任务评审 + 三段最终评审;后端全套件 **47/47**、前端构建通过、端到端验收 **PASS=23/FAIL=0**;交付与决策记录见 [m2-delivery.md](m2-delivery.md) |
-| M3 | 媒体(时间线 / 日期相册 / 缩略图 / 视频播放) | ✅ 分支 `m3-media` 上 13 个任务实现完成(**待合并**):后端全套件 **127/127**、前端构建 PASS;验收 **PASS=42 / FAIL=0**;SC-3 时间线首屏 1000 条实测中位数 **0.0287s**(预算 ≤2s) |
+| M3 | 媒体(时间线 / 日期相册 / 缩略图 / 视频播放) | ✅ 分支 `m3-media` 上 13 个任务实现完成(**待合并**):后端全套件 **127/127**、前端构建 PASS;验收 **PASS=42 / FAIL=0**;SC-3 时间线首屏 1000 条实测中位数 **0.0287s / 修复后复测 0.0217s**(预算 ≤2s) |
 | M4–M6 | 备份 / 流媒体加固 / 验收 | 待启动 |
 | M7 | 后续立项(镜像同步、移动通道评估等 Could 项) | 待启动 |
 
@@ -26,8 +26,8 @@
   - 跨用户隔离:成员读管理员缩略图 404、成员时间线 HTTP 200 且解析后不含该资产;
   - 视频 `/media/assets/{id}/content` + `Range: bytes=0-15` → 206 且 `Content-Range: bytes 0-15/`;
   - 删除 → 时间线消失(HTTP 200 + JSON 计数 0)→ 恢复 → 重新出现(HTTP 200 + JSON 计数 1);`POST /media/reindex` → 202,等待完成后条目数不变,且资产详情 `GET /media/assets/{id}` 仍为 200、时间线仍含该节点(非恒真信号)。
-- **性能(SC-3,1000 张首屏 ≤2s)**:`bash scripts/perf-m3-timeline.sh http://localhost:8090`。口径:psql 直插 1000 条 `media_assets`(绕开上传),`taken_at` 从 `now()` 起按 8h 间隔向过去铺开(1000 条约 11 个月,脚本按实际 min/max 计算跨度)、`thumb_status='READY'`、`indexed_at=now()`,全部复用同一已入库版本的 `manifest_sha256/size_bytes`(blob 与缩略图各一份),只测查询 + 首屏 JSON;端点 `GET /api/v1/media/timeline?limit=60`,3 次预热 + 5 次计时,每次断言 HTTP 200 后取 `curl time_total` 中位数。
-  - 实测:`[0.029968, 0.029064, 0.027618, 0.028661, 0.027169]s`(N=1000,返回 60 条),**中位数 0.0287s**,判定 ✅ ≤2s(本机单实例、PostgreSQL 16 容器、库与数据盘同机;正式部署需按其硬件复测)。
+- **性能(SC-3,1000 张首屏 ≤2s)**:`bash scripts/perf-m3-timeline.sh <BASE>`(首次 T13 于 `:8090`;修复波在隔离库/`:8091` 复测)。口径:psql 直插 1000 条 `media_assets`(绕开上传),`taken_at` 从 `now()` 起按 8h 间隔向过去铺开(1000 条约 11 个月,脚本按实际 min/max 计算跨度)、`thumb_status='READY'`、`indexed_at=now()`,全部复用同一已入库版本的 `manifest_sha256/size_bytes`(blob 与缩略图各一份),只测查询 + 首屏 JSON;端点 `GET /api/v1/media/timeline?limit=60`,3 次预热 + 5 次计时,每次断言 HTTP 200 后取 `curl time_total` 中位数。
+  - 实测(T13):`[0.029968, 0.029064, 0.027618, 0.028661, 0.027169]s`(N=1000,返回 60 条),**中位数 0.0287s**;**修复波复测**:同样 N=1000,5 次计时**中位数 0.0217s**(`PNAS_PERF_KEEP=1` 复跑 0.0172s、清理后 0.0179s),均判定 ✅ ≤2s(本机单实例、PostgreSQL 16 容器、库与数据盘同机;正式部署需按其硬件复测)。
 - **环境复现**:Postgres 容器 `pnas-acc-db`(host 55432,`acc/acc`,`pnas_m3`);`PNAS_JOBS_SCHEDULER_ENABLED=true`(否则媒体任务不会被领取);服务 `--server.port=8090`;Java 21 与 Maven 见下方工具链。
 - **已知限制与延后项(M3 接受,M5 收敛)**:
   - HEIC/HEIF/WebP/AVIF 可入库但 `thumb_status='SKIPPED'`(纯 Java 无法解码),缩略图待 M5;
