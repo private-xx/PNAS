@@ -13,6 +13,9 @@ import com.pnas.server.media.domain.ThumbStatus;
 import com.pnas.server.media.testfixtures.TestImages;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -22,19 +25,27 @@ import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 
 /** media.scan / media.thumb / media.reindex 端到端:上传 → 入队 → 同步执行 → 资产与缩略图。 */
 class MediaJobsTest extends AbstractIntegrationTest {
 
-    @Autowired JobService jobs;
+    @SpyBean JobService jobs;
     @Autowired UploadService uploads;
     @Autowired FilesService files;
     @Autowired FileVersionRepository versions;
     @Autowired MediaAssetRepository assets;
     @Autowired DerivedStore derived;
     @Autowired UserRepository users;
+    @Autowired PlatformTransactionManager txManager;
 
     private record Built(UUID nodeId, UUID versionId) {}
 
@@ -119,17 +130,42 @@ class MediaJobsTest extends AbstractIntegrationTest {
     void reindexIsIdempotent() throws Exception {
         var built = upload("reindex-" + UUID.randomUUID() + ".jpg", TestImages.plainJpeg(120, 90));
         drainJobs();
-        long before = assets.count();
+        UUID assetIdBefore = assets.findByFileVersionId(built.versionId()).orElseThrow().getId();
 
         jobs.enqueue("media.reindex", Map.of());
         drainJobs();
 
-        assertThat(assets.count()).isEqualTo(before);   // 重复扫描不新增记录
-        assertThat(assets.findByFileVersionId(built.versionId())).isPresent();
+        // 作用域收敛到本 node/version:重复扫描不新增同版本记录,也不换 asset
+        var assetAfter = assets.findByFileVersionId(built.versionId()).orElseThrow();
+        assertThat(assetAfter.getId()).isEqualTo(assetIdBefore);
+        assertThat(assets.findAll().stream()
+            .filter(a -> a.getNodeId().equals(built.nodeId()))
+            .count()).isEqualTo(1);
     }
 
     @Test
-    void completeEnqueuesScanOnceOnNormalPathOnly() throws Exception {
+    void reindexBackfillsMissingThumbnails() throws Exception {
+        var built = upload("backfill-" + UUID.randomUUID() + ".jpg", TestImages.plainJpeg(640, 480));
+        drainJobs();
+        String sha = versions.findById(built.versionId()).orElseThrow().getManifestSha256();
+        // 模拟 pre-M3 / 派生目录丢失:asset 仍在但 PENDING,且两个尺寸的派生文件都不存在
+        Files.deleteIfExists(derived.thumbPath(sha, 256));
+        Files.deleteIfExists(derived.thumbPath(sha, 512));
+        var asset = assets.findByFileVersionId(built.versionId()).orElseThrow();
+        asset.markThumb(ThumbStatus.PENDING);
+        assets.save(asset);
+
+        jobs.enqueue("media.reindex", Map.of());
+        drainJobs();
+
+        assertThat(assets.findByFileVersionId(built.versionId()).orElseThrow().getThumbStatus())
+            .isEqualTo(ThumbStatus.READY);
+        assertThat(derived.exists(sha, 256)).isTrue();
+        assertThat(derived.exists(sha, 512)).isTrue();
+    }
+
+    @Test
+    void completeEnqueuesScanOnlyAfterCommitAndOnceOnRetry() throws Exception {
         var admin = users.findByUsername("admin").orElseThrow();
         var home = files.ensureUserHome(admin);
         byte[] jpeg = TestImages.plainJpeg(64, 48);
@@ -138,15 +174,46 @@ class MediaJobsTest extends AbstractIntegrationTest {
         uploads.acceptChunk(admin.getId(), uploadId, 0, new ByteArrayInputStream(jpeg),
             Sha256.hex(jpeg));
 
-        var done = uploads.complete(admin.getId(), uploadId);
-        UUID versionId = versions.findTopByNodeIdOrderByVersionNoDesc(done.nodeId())
-            .orElseThrow().getId();
-        // R18:提交后入队确实落库(若在 afterCommit 里加入旧事务,这里会是 0)
-        assertThat(scanJobsFor(versionId)).isEqualTo(1);
+        // 外层事务包住 complete:提交前任务必须不可见(证明不是"事务内入队")
+        var outerTx = new TransactionTemplate(txManager);
+        var versionId = new AtomicReference<UUID>();
+        outerTx.executeWithoutResult(status -> {
+            var done = uploads.complete(admin.getId(), uploadId);
+            versionId.set(versions.findTopByNodeIdOrderByVersionNoDesc(done.nodeId())
+                .orElseThrow().getId());
+            assertThat(scanJobsFor(versionId.get())).isZero();
+        });
+        // 外层事务提交后 afterCommit 才入队
+        assertThat(scanJobsFor(versionId.get())).isEqualTo(1);
 
         // 幂等分支(会话已 COMPLETE):返回既有结果,不重复入队
         uploads.complete(admin.getId(), uploadId);
-        assertThat(scanJobsFor(versionId)).isEqualTo(1);
+        assertThat(scanJobsFor(versionId.get())).isEqualTo(1);
+    }
+
+    @Test
+    void scanEnqueueFailureDoesNotFailUpload() throws Exception {
+        doThrow(new RuntimeException("boom"))
+            .when(jobs).enqueue(eq("media.scan"), any(), anyInt(), anyLong());
+
+        var admin = users.findByUsername("admin").orElseThrow();
+        var home = files.ensureUserHome(admin);
+        byte[] jpeg = TestImages.plainJpeg(64, 48);
+        UUID uploadId = uploads.start(admin, home.getId(),
+            "enqueue-fail-" + UUID.randomUUID() + ".jpg", jpeg.length);
+        uploads.acceptChunk(admin.getId(), uploadId, 0, new ByteArrayInputStream(jpeg),
+            Sha256.hex(jpeg));
+
+        // 入队抛异常只 WARN:上传仍成功,版本行仍提交,只是没有 media.scan 任务
+        var done = uploads.complete(admin.getId(), uploadId);
+        UUID versionId = versions.findTopByNodeIdOrderByVersionNoDesc(done.nodeId())
+            .orElseThrow().getId();
+
+        assertThat(done.versionNo()).isEqualTo(1);
+        assertThat(versions.findById(versionId)).isPresent();
+        assertThat(scanJobsFor(versionId)).isZero();
+        // 确认确实尝试过入队(否则本用例可能因"根本没调用"而假通过)
+        verify(jobs).enqueue(eq("media.scan"), any(), anyInt(), anyLong());
     }
 
     private long scanJobsFor(UUID versionId) {
