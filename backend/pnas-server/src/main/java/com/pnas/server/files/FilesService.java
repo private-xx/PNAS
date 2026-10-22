@@ -215,15 +215,13 @@ public class FilesService {
 
     /** 媒体 job 等内部受信调用:按版本打开完整内容流(不校验 ACL,不暴露给 HTTP 层)。 */
     public InputStream openVersion(UUID versionId) {
-        List<InputStream> parts = new ArrayList<>();
+        // 惰性开流(R19):EXIF/mvhd 只读文件头,不应为 2GB 视频同时打开数百个分块 FD
+        List<Streams.Opener> parts = new ArrayList<>();
         for (VersionChunk c : chunks.findAllByVersionIdOrderBySeqAsc(versionId)) {
-            try {
-                parts.add(blobs.open(c.getBlobHash()));
-            } catch (IOException e) {
-                throw new UncheckedIOException("读取分块失败: " + c.getBlobHash(), e);
-            }
+            String blobHash = c.getBlobHash();
+            parts.add(() -> blobs.open(blobHash));
         }
-        return Streams.concat(parts);
+        return Streams.lazyConcat(parts);
     }
 
     // ---------------------------------------------------------------- 内部

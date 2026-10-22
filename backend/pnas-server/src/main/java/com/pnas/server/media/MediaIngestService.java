@@ -49,6 +49,11 @@ public class MediaIngestService {
             ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "节点不存在: " + nodeId));
         FileVersion version = versions.findById(versionId).orElseThrow(() -> new BusinessException(
             ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文件版本不存在: " + versionId));
+        // 防御错配 payload:版本必须属于该节点,否则资产会挂到错误的节点上
+        if (!version.getNode().getId().equals(nodeId)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST,
+                "文件版本不属于该节点: " + versionId);
+        }
 
         MediaKind kind = MediaTypes.classify(node.getName(), version.getMimeType());
         if (kind == null) {
