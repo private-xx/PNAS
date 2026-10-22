@@ -103,18 +103,30 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
      * 非线程安全)。这是 MockMvc 的已知限制(M2 的 {@code NodesApiIntegrationTest}
      * 也会偶发),仅对会产生流式响应的请求做有限重试,避免测试基础设施竞态掩盖端点契约。
      */
+    private MockHttpServletResponse performStreaming(RequestBuilder request, int expectedStatus)
+            throws Exception {
+        return performStreaming(request, expectedStatus, null);
+    }
+
     private MockHttpServletResponse performStreaming(RequestBuilder request, int expectedStatus,
                                                      byte[] expectedBody) throws Exception {
         for (int attempt = 1; ; attempt++) {
             try {
                 MockHttpServletResponse response = mvc.perform(request).andReturn().getResponse();
-                if (response.getStatus() == expectedStatus
-                    && java.util.Arrays.equals(response.getContentAsByteArray(), expectedBody)) {
+                byte[] actual = response.getContentAsByteArray();
+                boolean bodyOk = expectedBody == null
+                    ? actual.length > 0
+                    : java.util.Arrays.equals(actual, expectedBody);
+                if (response.getStatus() == expectedStatus && bodyOk) {
                     return response;
                 }
                 if (attempt >= 5) {
                     assertThat(response.getStatus()).isEqualTo(expectedStatus);
-                    assertThat(response.getContentAsByteArray()).isEqualTo(expectedBody);
+                    if (expectedBody == null) {
+                        assertThat(actual).isNotEmpty();
+                    } else {
+                        assertThat(actual).isEqualTo(expectedBody);
+                    }
                     return response;
                 }
             } catch (Exception e) {
@@ -169,6 +181,14 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
         mvc.perform(get("/api/v1/media/assets/{id}/thumb", assetId)
                 .param("size", "128").header("Cookie", auth.cookie()))
             .andExpect(status().isBadRequest());
+
+        // 图片内容:按版本 MIME / 文件名推断应为 image/jpeg,可 inline 展示
+        var imageContent = performStreaming(get("/api/v1/media/assets/{id}/content", assetId)
+                .header("Cookie", auth.cookie()), 200);
+        assertThat(imageContent.getHeader("Content-Type")).isEqualTo("image/jpeg");
+        assertThat(imageContent.getHeader("Accept-Ranges")).isEqualTo("bytes");
+        assertThat(imageContent.getHeader("Content-Disposition")).isEqualTo("inline");
+        assertThat(imageContent.getHeader("Content-Range")).isNull();
     }
 
     @Test
@@ -244,11 +264,14 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
                 .header("Cookie", auth.cookie()).header("Range", "bytes=0-15"), 206, expected);
         assertThat(ranged.getHeader("Accept-Ranges")).isEqualTo("bytes");
         assertThat(ranged.getHeader("Content-Range")).startsWith("bytes 0-15/");
+        assertThat(ranged.getHeader("Content-Type")).startsWith("video/");
+        assertThat(ranged.getHeader("Content-Disposition")).isEqualTo("inline");
         assertThat(ranged.getContentAsByteArray()).isEqualTo(expected);
 
         var full = performStreaming(get("/api/v1/media/assets/{id}/content", assetId)
                 .header("Cookie", auth.cookie()), 200, mp4);
         assertThat(full.getHeader("Content-Range")).isNull();
+        assertThat(full.getHeader("Content-Type")).startsWith("video/");
         assertThat(full.getContentAsByteArray()).isEqualTo(mp4);
 
         // 视频没有缩略图(fixture 不可解码/或非图片):一律 404

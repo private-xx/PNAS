@@ -8,6 +8,7 @@ import com.pnas.server.files.FileVersionRepository;
 import com.pnas.server.files.FilesService;
 import com.pnas.server.files.NodeRepository;
 import com.pnas.server.files.RangeSpec;
+import com.pnas.server.files.domain.FileVersion;
 import com.pnas.server.job.JobService;
 import com.pnas.server.media.domain.MediaAsset;
 import com.pnas.server.media.domain.MediaKind;
@@ -15,6 +16,7 @@ import com.pnas.server.media.domain.ThumbStatus;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.MediaTypeFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -128,6 +130,7 @@ public class MediaController {
             @PathVariable UUID id,
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader) {
         MediaAsset asset = timeline.requireReadable(me, id);
+        var version = versions.findById(asset.getFileVersionId()).orElseThrow();
         long total = files.sizeOf(me, asset.getNodeId());
         RangeSpec spec = RangeSpec.parse(rangeHeader, total);
         var content = files.content(me, asset.getNodeId(), spec.start(), spec.length());
@@ -139,7 +142,8 @@ public class MediaController {
         var builder = ResponseEntity.status(spec.ranged() ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
             .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(spec.length()))
             .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-            .contentType(MediaType.APPLICATION_OCTET_STREAM);
+            .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
+            .contentType(contentTypeOf(asset, version));
         if (spec.ranged()) {
             builder.header(HttpHeaders.CONTENT_RANGE,
                 "bytes " + spec.start() + "-" + (spec.start() + spec.length() - 1) + "/" + total);
@@ -154,6 +158,27 @@ public class MediaController {
         }
         UUID jobId = jobs.enqueue("media.reindex", Map.of(), 1, 0);
         return ResponseEntity.accepted().body(Map.of("jobId", jobId.toString()));
+    }
+
+    /**
+     * 内容类型:优先版本 MIME;上传链路历史上固定写 {@code application/octet-stream},
+     * 此时按文件名推断(保证图片与 {@code <video>} 能直放/在线播放);最后回退 octet-stream。
+     */
+    private MediaType contentTypeOf(MediaAsset asset, FileVersion version) {
+        String mime = version.getMimeType();
+        if (mime != null && !mime.isBlank()) {
+            try {
+                MediaType parsed = MediaType.parseMediaType(mime.trim());
+                if (!MediaType.APPLICATION_OCTET_STREAM.equals(parsed)) {
+                    return parsed;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 版本里的 MIME 非法:继续按文件名推断
+            }
+        }
+        return nodes.findById(asset.getNodeId())
+            .flatMap(n -> MediaTypeFactory.getMediaType(n.getName()))
+            .orElse(MediaType.APPLICATION_OCTET_STREAM);
     }
 
     /** kind 参数容错:缺省为空;大小写不敏感;非法值映射为统一 400 错误体而非 500。 */
