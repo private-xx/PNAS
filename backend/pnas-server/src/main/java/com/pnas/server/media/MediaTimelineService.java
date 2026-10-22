@@ -120,7 +120,9 @@ public class MediaTimelineService {
     public MediaAsset requireReadable(SessionPrincipal me, UUID assetId) {
         MediaAsset asset = assets.findById(assetId).orElseThrow(MediaTimelineService::notFound);
         Node node = nodes.findById(asset.getNodeId()).orElseThrow(MediaTimelineService::notFound);
-        if (node.getTrashedAt() != null || !acl.hasPermission(me, node.getId(), 'r')) {
+        // 关键:不能只查节点自身的 trashed_at。M2 删除目录是逐节点的,子节点仍为 null,
+        // 若不沿父链判断,回收站目录下的媒体仍会经 /thumb、/content 被读出来。
+        if (inTrashedSubtree(node) || !acl.hasPermission(me, node.getId(), 'r')) {
             throw notFound();
         }
         return asset;
@@ -145,11 +147,11 @@ public class MediaTimelineService {
             .map(Node::getId)
             .ifPresent(roots::add);
         acls.findByPrincipalTypeAndPrincipalId(AclEntry.PrincipalType.USER, me.userId()).stream()
-            .filter(MediaTimelineService::grantsRead)
+            .filter(MediaTimelineService::isReadableAclRoot)
             .forEach(e -> roots.add(e.getNode().getId()));
         for (UUID groupId : groups.findGroupIdsByUserId(me.userId())) {
             acls.findByPrincipalTypeAndPrincipalId(AclEntry.PrincipalType.GROUP, groupId).stream()
-                .filter(MediaTimelineService::grantsRead)
+                .filter(MediaTimelineService::isReadableAclRoot)
                 .forEach(e -> roots.add(e.getNode().getId()));
         }
         return roots;
@@ -205,9 +207,24 @@ public class MediaTimelineService {
         throw new IllegalStateException("无法解析 taken_at: " + value);
     }
 
-    /** 仅"含 r 且不含显式拒绝 -"的条目可作为可见性根。 */
+    /** 仅"含 r、不含显式拒绝 -、且祖先链未进回收站"的 ACL 条目可作为可见性根。 */
+    private static boolean isReadableAclRoot(AclEntry e) {
+        return grantsRead(e) && !inTrashedSubtree(e.getNode());
+    }
+
+    /** 仅"含 r 且不含显式拒绝 -"的条目可作为可见性根(祖先回收站状态另判)。 */
     private static boolean grantsRead(AclEntry e) {
         return e.getPerms().indexOf('r') >= 0 && e.getPerms().indexOf('-') < 0;
+    }
+
+    /** 节点自身或任一祖先在回收站中(M2 回收站逐节点,删除目录不会级联标记子节点)。 */
+    private static boolean inTrashedSubtree(Node node) {
+        for (Node current = node; current != null; current = current.getParent()) {
+            if (current.getTrashedAt() != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static BusinessException notFound() {

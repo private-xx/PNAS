@@ -156,6 +156,27 @@ class MediaTimelineServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void cursorWithIdenticalTakenAtUsesIdTieBreakWithoutDuplicates() throws Exception {
+        var owner = newMember();
+        var first = uploadPhoto(owner, "2026-12-12T08:00:00");
+        var second = uploadPhoto(owner, "2026-12-12T08:00:00");
+
+        var page1 = timeline.timeline(principal(owner), null, 1, MediaKind.IMAGE);
+        assertThat(page1).hasSize(1);
+        var cursor = page1.get(0).takenAt() + "|" + page1.get(0).assetId();
+        var page2 = timeline.timeline(principal(owner), cursor, 1, MediaKind.IMAGE);
+
+        // 同一 taken_at 的两条必须由 id 做平局裁决:不重复、不跳过
+        assertThat(page2).hasSize(1);
+        assertThat(page2.get(0).takenAt()).isEqualTo(page1.get(0).takenAt());
+        assertThat(List.of(page1.get(0).assetId(), page2.get(0).assetId()))
+            .containsExactlyInAnyOrder(first.assetId(), second.assetId());
+        var after = timeline.timeline(principal(owner),
+            page2.get(0).takenAt() + "|" + page2.get(0).assetId(), 1, MediaKind.IMAGE);
+        assertThat(after).isEmpty();
+    }
+
+    @Test
     void bucketsGroupByMonth() throws Exception {
         var owner = newMember();
         uploadPhoto(owner, "2026-05-05T08:00:00");
@@ -205,6 +226,42 @@ class MediaTimelineServiceTest extends AbstractIntegrationTest {
         assertThat(timeline.requireReadable(principal(direct), photo.assetId()).getId())
             .isEqualTo(photo.assetId());
         assertThat(timeline.requireReadable(principal(grouped), photo.assetId()).getId())
+            .isEqualTo(photo.assetId());
+    }
+
+    @Test
+    void trashedAncestorHidesAclGrantedSubtreeForGranteeAndOwner() throws Exception {
+        var owner = newMember();
+        var home = files.ensureUserHome(owner);
+        var parent = files.createDir(principal(owner), home.getId(),
+            "album-parent-" + UUID.randomUUID());
+        var shared = files.createDir(principal(owner), parent.id(),
+            "album-shared-" + UUID.randomUUID());
+        var photo = uploadPhoto(owner, shared.id(), "2026-11-11T08:00:00");
+
+        var grantee = newMember();
+        acls.setAcl(principal(owner), shared.id(),
+            List.of(new AclService.EntryDto("USER", grantee.getId(), "r", true)));
+
+        assertThat(timeline.timeline(principal(grantee), null, 50, null))
+            .extracting(TimelineItem::assetId).containsExactly(photo.assetId());
+        assertThat(timeline.buckets(principal(grantee), 2026, MediaKind.IMAGE))
+            .containsExactly(new PeriodCount("2026-11", 1));
+
+        // 只删父目录(shared 自身 trashed_at 仍为 null):授权根必须沿父链剪掉
+        files.trash(principal(owner), parent.id());
+
+        assertThat(timeline.timeline(principal(grantee), null, 50, null)).isEmpty();
+        assertThat(timeline.buckets(principal(grantee), 2026, MediaKind.IMAGE)).isEmpty();
+        assertThat(timeline.albumsDates(principal(grantee))).isEmpty();
+        assertThatThrownBy(() -> timeline.requireReadable(principal(grantee), photo.assetId()))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("不存在");
+
+        files.restore(principal(owner), parent.id());
+        assertThat(timeline.timeline(principal(grantee), null, 50, null))
+            .extracting(TimelineItem::assetId).containsExactly(photo.assetId());
+        assertThat(timeline.requireReadable(principal(grantee), photo.assetId()).getId())
             .isEqualTo(photo.assetId());
     }
 

@@ -67,7 +67,14 @@ public interface MediaAssetRepository extends JpaRepository<MediaAsset, UUID> {
                                      @Param("cursorId") String cursorId,
                                      @Param("limit") int limit);
 
-    /** 某一年的月份桶计数(受可读子树与回收站约束)。 */
+    /**
+     * 某一年的月份桶计数(受可读子树与回收站约束)。
+     *
+     * <p><b>时区语义(R13/R16):</b>{@code to_char}/{@code date_part} 使用 PostgreSQL 会话
+     * TimeZone。PgJDBC 默认把会话 TimeZone 设为 JVM 默认时区,因此月桶与 {@code ExifReader}
+     * 的"EXIF 无时区按本地墙上时间解释"一致;若部署显式配置了不同的 server/JDBC TimeZone,
+     * 跨月/跨日边界的分组会整体偏移。</p>
+     */
     @Query(value = """
         WITH RECURSIVE readable AS (
             SELECT n.id FROM nodes n WHERE n.id IN (:rootIds) AND n.trashed_at IS NULL
@@ -88,7 +95,7 @@ public interface MediaAssetRepository extends JpaRepository<MediaAsset, UUID> {
                                        @Param("year") int year,
                                        @Param("kind") String kind);
 
-    /** 全部年份的月份桶计数(日期相册视图)。 */
+    /** 全部年份的月份桶计数(日期相册视图);时区语义同 {@link #bucketCountsForYear}。 */
     @Query(value = """
         WITH RECURSIVE readable AS (
             SELECT n.id FROM nodes n WHERE n.id IN (:rootIds) AND n.trashed_at IS NULL
