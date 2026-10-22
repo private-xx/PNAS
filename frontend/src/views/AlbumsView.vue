@@ -5,12 +5,15 @@ import { errorMessage } from '@/api/http'
 
 const years = ref<mediaApi.YearMonths[]>([])
 const error = ref('')
+const loading = ref(true)
 
 onMounted(async () => {
   try {
     years.value = await mediaApi.listAlbumDates()
   } catch (e) {
     error.value = errorMessage(e, '加载相册失败')
+  } finally {
+    loading.value = false
   }
 })
 </script>
@@ -31,7 +34,8 @@ onMounted(async () => {
         </div>
       </div>
     </div>
-    <div v-if="!error && years.length === 0" class="hint">暂无相册</div>
+    <div v-if="loading" class="hint">加载中…</div>
+    <div v-else-if="!error && years.length === 0" class="hint">暂无相册</div>
   </div>
 </template>
 

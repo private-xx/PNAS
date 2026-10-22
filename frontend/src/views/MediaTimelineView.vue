@@ -10,6 +10,7 @@ const items = ref<mediaApi.TimelineItem[]>([])
 const cursor = ref<string | null>(null)
 const loading = ref(false)
 const finished = ref(false)
+const failed = ref(false)
 const error = ref('')
 const kindFilter = ref<KindFilter>('')
 const viewerIndex = ref(-1)
@@ -19,6 +20,13 @@ let generation = 0
 const activeKind = computed<mediaApi.MediaKind | null>(() =>
   kindFilter.value === '' ? null : kindFilter.value,
 )
+
+/** 空态文案按当前筛选条件分支,避免"视频"页提示上传照片。 */
+const emptyText = computed(() => {
+  if (kindFilter.value === 'IMAGE') return '还没有照片,先上传一些照片吧'
+  if (kindFilter.value === 'VIDEO') return '还没有视频,先上传一些视频吧'
+  return '还没有媒体,先上传一些照片或视频吧'
+})
 
 /** 按**本地时区**取日期(R16:后端 Instant 以 UTC 序列化,直接切片会得到 UTC 日期)。 */
 function localDay(iso: string): string {
@@ -41,7 +49,7 @@ const groups = computed(() => {
 })
 
 async function loadMore() {
-  if (loading.value || finished.value) return
+  if (loading.value || finished.value || failed.value) return
   loading.value = true
   error.value = ''
   const gen = generation
@@ -56,10 +64,20 @@ async function loadMore() {
       cursor.value = `${last.takenAt}|${last.assetId}`
     }
   } catch (e) {
-    if (gen === generation) error.value = errorMessage(e, '加载时间线失败')
+    if (gen === generation) {
+      failed.value = true
+      error.value = errorMessage(e, '加载时间线失败')
+    }
   } finally {
     if (gen === generation) loading.value = false
   }
+}
+
+/** 失败后手动重试:解除失败锁并继续从当前游标拉取。 */
+function retry() {
+  failed.value = false
+  error.value = ''
+  void loadMore()
 }
 
 function switchKind(value: string | number | boolean | undefined) {
@@ -70,6 +88,7 @@ function switchKind(value: string | number | boolean | undefined) {
   items.value = []
   cursor.value = null
   finished.value = false
+  failed.value = false
   loading.value = false
   error.value = ''
   viewerIndex.value = -1
@@ -83,6 +102,7 @@ function placeholderText(status: mediaApi.ThumbStatus): string {
 }
 
 function onScroll() {
+  if (failed.value) return
   const el = document.documentElement
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
     void loadMore()
@@ -107,7 +127,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
       <router-link to="/media/albums"><el-button text>日期相册</el-button></router-link>
     </div>
 
-    <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <div v-if="error" class="error-row">
+      <el-alert :title="error" type="error" :closable="false" />
+      <el-button size="small" @click="retry">重试</el-button>
+    </div>
 
     <div v-for="group in groups" :key="group.day" class="day-group">
       <h3 class="day-title">{{ group.day }}</h3>
@@ -133,7 +156,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
     </div>
 
     <div v-if="loading" class="hint">加载中…</div>
-    <div v-else-if="finished && items.length === 0" class="hint">还没有媒体,先上传一些照片吧</div>
+    <div v-else-if="finished && items.length === 0" class="hint">{{ emptyText }}</div>
 
     <MediaViewer v-model:index="viewerIndex" :items="items" />
   </div>
@@ -148,6 +171,15 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 .day-group {
   padding: 0 1rem;
+}
+.error-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1rem;
+}
+.error-row .el-alert {
+  flex: 1;
 }
 .day-title {
   margin: 1rem 0 0.5rem;

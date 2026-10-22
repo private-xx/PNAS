@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as nodesApi from '@/api/nodes'
 import { errorMessage } from '@/api/http'
+import { sizeText } from '@/utils/format'
 import { useUploader } from '@/components/ChunkUploader'
 
 const loading = ref(false)
@@ -130,12 +131,6 @@ async function onDrop(event: DragEvent) {
   if (files?.length) {
     await enqueue(files)
   }
-}
-
-function sizeText(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 onMounted(reload)

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as mediaApi from '@/api/media'
+import { sizeText } from '@/utils/format'
 
 const props = defineProps<{ items: mediaApi.TimelineItem[] }>()
 const index = defineModel<number>('index', { default: -1 })
@@ -35,12 +36,10 @@ watch(current, (item) => {
     })
 })
 
-/** 体积展示(与文件视图保持一致的口径)。 */
-function sizeText(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
+/** 时长来源:详情优先,退回时间线条目(与下方提示共用同一来源)。 */
+const durationMs = computed<number | null>(
+  () => detail.value?.durationMs ?? current.value?.durationMs ?? null,
+)
 
 /** 毫秒 → m:ss / h:mm:ss。 */
 function durationText(ms: number): string {
@@ -51,6 +50,12 @@ function durationText(ms: number): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
 }
+
+/** 旋转 90°/270° 时交换尺寸约束,避免大图越出舞台(纯 CSS transform,不改布局)。 */
+const imageStyle = computed(() => ({
+  transform: `rotate(${rotation.value}deg)`,
+  maxWidth: rotation.value % 180 === 0 ? undefined : 'min(100%, 68vh)',
+}))
 
 /** 元信息一律按**本地时区**格式化(R16:禁止直接展示 UTC 字符串)。 */
 const metaText = computed(() => {
@@ -65,8 +70,7 @@ const metaText = computed(() => {
   const width = detail.value?.width ?? item.width
   const height = detail.value?.height ?? item.height
   if (width && height) parts.push(`${width}×${height}`)
-  const duration = detail.value?.durationMs ?? item.durationMs
-  if (item.kind === 'VIDEO' && duration) parts.push(durationText(duration))
+  if (item.kind === 'VIDEO' && durationMs.value) parts.push(durationText(durationMs.value))
   const bytes = detail.value?.sizeBytes ?? item.sizeBytes
   if (typeof bytes === 'number') parts.push(sizeText(bytes))
   return parts.join(' · ')
@@ -106,19 +110,21 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
         playsinline
         class="stage"
       />
-      <div v-else class="stage">
+      <div v-else class="stage image-stage">
         <img
+          v-if="current.thumbStatus === 'READY'"
           :src="mediaApi.thumbUrl(current.assetId, 512)"
-          :style="{ transform: `rotate(${rotation}deg)` }"
+          :style="imageStyle"
           class="thumb-layer"
           alt=""
         />
         <img
-          v-if="highResReady"
+          v-if="highResReady || current.thumbStatus !== 'READY'"
           :src="mediaApi.mediaContentUrl(current.assetId)"
-          :style="{ transform: `rotate(${rotation}deg)` }"
-          class="full-layer"
+          :style="imageStyle"
+          :class="current.thumbStatus === 'READY' ? 'full-layer' : 'full-inline'"
           alt=""
+          @load="highResReady = true"
         />
         <img
           v-else
@@ -133,12 +139,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
       <div class="actions">
         <el-button :disabled="index <= 0" @click="step(-1)">上一张</el-button>
         <el-button v-if="current.kind !== 'VIDEO'" @click="rotation = (rotation + 90) % 360">旋转</el-button>
-        <a :href="mediaApi.mediaContentUrl(current.assetId)" download>
-          <el-button>下载原图</el-button>
+        <a :href="mediaApi.mediaContentUrl(current.assetId)" :download="current.name">
+          <el-button>{{ current.kind === 'VIDEO' ? '下载视频' : '下载原图' }}</el-button>
         </a>
         <el-button :disabled="index >= items.length - 1" @click="step(1)">下一张</el-button>
       </div>
-      <div v-if="current.kind === 'VIDEO' && current.durationMs === null" class="note">
+      <div v-if="current.kind === 'VIDEO' && durationMs === null" class="note">
         该容器暂无法解析时长;若浏览器不支持直放,请等待 M5 转码
       </div>
     </div>
@@ -154,11 +160,18 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 }
 .stage {
   position: relative;
-  max-width: 100%;
+  width: min(100%, 1200px);
   max-height: 68vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+}
+.image-stage {
+  height: 68vh;
+}
+video.stage {
+  object-fit: contain;
 }
 .stage img,
 .stage video {
@@ -170,6 +183,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   position: absolute;
   inset: 0;
   margin: auto;
+}
+.full-inline {
+  display: block;
 }
 .hidden-preload {
   display: none;

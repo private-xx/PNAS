@@ -75,12 +75,15 @@ export async function reindexMedia(): Promise<{ jobId: string }> {
   return response.data
 }
 
+/** 媒体直链共用的 API 前缀(与 http.ts 的 baseURL 保持一致)。 */
+export const API_BASE = '/api/v1'
+
 /** 缩略图直链(鉴权走 Cookie,spec D1)。 */
 export function thumbUrl(assetId: string, size: 256 | 512 = 256): string {
-  return `/api/v1/media/assets/${assetId}/thumb?size=${size}`
+  return `${API_BASE}/media/assets/${assetId}/thumb?size=${size}`
 }
 
 /** 原图/视频直链(支持 Range,供 <video> 使用)。 */
 export function mediaContentUrl(assetId: string): string {
-  return `/api/v1/media/assets/${assetId}/content`
+  return `${API_BASE}/media/assets/${assetId}/content`
 }
