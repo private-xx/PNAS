@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.Date;
+import java.util.TimeZone;
 
 /** 读取 EXIF(拍摄时间/Orientation/GPS/尺寸);任何解析失败都降级为空结果,不抛异常(spec §7)。 */
 @Component
@@ -33,7 +34,10 @@ public class ExifReader {
             Instant takenAt = null;
             ExifSubIFDDirectory sub = md.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
             if (sub != null) {
-                Date original = sub.getDateOriginal();
+                // EXIF DateTimeOriginal 是无时区的本地墙钟时间:按 JVM 默认时区解释
+                // (单时区家庭 NAS;可配置时区延后到 M5)
+                TimeZone zone = TimeZone.getDefault();
+                Date original = zone != null ? sub.getDateOriginal(zone) : sub.getDateOriginal();
                 if (original != null) {
                     takenAt = original.toInstant();
                 }

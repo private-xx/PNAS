@@ -6,8 +6,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.time.ZoneOffset;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 /** 测试素材:构造可控 EXIF 的 JPEG(不依赖外部工具或二进制 fixture)。 */
@@ -28,8 +27,8 @@ public final class TestImages {
         return out.toByteArray();
     }
 
-    /** 带 EXIF 的 JPEG:Orientation + DateTimeOriginal(UTC)+ GPS 经纬度。 */
-    public static byte[] jpegWithExif(Instant takenAt, double lat, double lon, int orientation,
+    /** 带 EXIF 的 JPEG:Orientation + DateTimeOriginal(本地墙钟时间)+ GPS 经纬度。 */
+    public static byte[] jpegWithExif(LocalDateTime takenAt, double lat, double lon, int orientation,
                                       int width, int height) throws Exception {
         byte[] base = plainJpeg(width, height);
         byte[] app1 = exifApp1(takenAt, lat, lon, orientation);
@@ -40,9 +39,8 @@ public final class TestImages {
         return out.toByteArray();
     }
 
-    private static byte[] exifApp1(Instant takenAt, double lat, double lon, int orientation) {
-        String dt = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss")
-            .withZone(ZoneOffset.UTC).format(takenAt);
+    private static byte[] exifApp1(LocalDateTime takenAt, double lat, double lon, int orientation) {
+        String dt = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss").format(takenAt);
         byte[] dtBytes = (dt + "\0").getBytes(StandardCharsets.US_ASCII);   // 20 字节
 
         // 偏移布局(相对 TIFF 头起点):头 8 + IFD0(3 项:2+3*12+4=42) + ExifIFD(1 项:2+12+4=18) + GPS IFD(4 项:2+48+4=54)
