@@ -9,6 +9,7 @@ import com.pnas.server.files.FilesService;
 import com.pnas.server.files.UploadService;
 import com.pnas.server.iam.AclService;
 import com.pnas.server.iam.GroupService;
+import com.pnas.server.iam.UserRepository;
 import com.pnas.server.iam.UserService;
 import com.pnas.server.iam.domain.User;
 import com.pnas.server.media.MediaTimelineService.PeriodCount;
@@ -30,8 +31,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * 时间线可见性/游标/桶的集成测试。
  *
- * <p>每个用例都用**新建成员**做数据隔离:测试库在整个 JVM 内共享,admin 的 home 里
- * 会有其它测试类留下的媒体,断言若基于 admin 会互相污染。成员名随机,数据只属于它自己。</p>
+ * <p>除 ADMIN 作用域用例外,每个用例都用**新建成员**做数据隔离:测试库在整个 JVM 内共享,
+ * admin 的 home 里会有其它测试类留下的媒体,全局断言(如"总共几条")会被污染。成员名随机,
+ * 数据只属于它自己;ADMIN 用例只断言"包含/不包含"指定 assetId,并使用 2037 年时间戳,
+ * 保证在 ADMIN 全量时间线的前 200 条内。</p>
  */
 class MediaTimelineServiceTest extends AbstractIntegrationTest {
 
@@ -41,6 +44,7 @@ class MediaTimelineServiceTest extends AbstractIntegrationTest {
     @Autowired FilesService files;
     @Autowired FileVersionRepository versions;
     @Autowired UserService userService;
+    @Autowired UserRepository users;
     @Autowired AclService acls;
     @Autowired GroupService groupService;
 
@@ -55,12 +59,16 @@ class MediaTimelineServiceTest extends AbstractIntegrationTest {
 
     private record Photo(UUID nodeId, UUID assetId) {}
 
-    /** 走真实上传 + 入库流程造出一张带 EXIF 的照片。 */
+    /** 走真实上传 + 入库流程造出一张带 EXIF 的照片(默认传到 owner 的 home)。 */
     private Photo uploadPhoto(User owner, String localDateTime) throws Exception {
-        var home = files.ensureUserHome(owner);
+        return uploadPhoto(owner, files.ensureUserHome(owner).getId(), localDateTime);
+    }
+
+    /** 同上,但上传到指定目录(用于目录子树剪枝用例)。 */
+    private Photo uploadPhoto(User owner, UUID parentId, String localDateTime) throws Exception {
         byte[] jpeg = TestImages.jpegWithExif(LocalDateTime.parse(localDateTime), 1.0, 2.0, 1, 200, 150);
         String name = "tl-" + UUID.randomUUID() + ".jpg";
-        UUID uploadId = uploads.start(owner, home.getId(), name, jpeg.length);
+        UUID uploadId = uploads.start(owner, parentId, name, jpeg.length);
         uploads.acceptChunk(owner.getId(), uploadId, 0, new ByteArrayInputStream(jpeg), Sha256.hex(jpeg));
         var done = uploads.complete(owner.getId(), uploadId);
         UUID versionId = versions.findTopByNodeIdOrderByVersionNoDesc(done.nodeId())
@@ -198,6 +206,49 @@ class MediaTimelineServiceTest extends AbstractIntegrationTest {
             .isEqualTo(photo.assetId());
         assertThat(timeline.requireReadable(principal(grouped), photo.assetId()).getId())
             .isEqualTo(photo.assetId());
+    }
+
+    @Test
+    void trashingDirectoryPrunesItsSubtreeAndRestoreBringsItBack() throws Exception {
+        var owner = newMember();
+        var home = files.ensureUserHome(owner);
+        var dir = files.createDir(principal(owner), home.getId(), "trip-" + UUID.randomUUID());
+        var photo = uploadPhoto(owner, dir.id(), "2026-09-09T08:00:00");
+
+        assertThat(timeline.timeline(principal(owner), null, 200, null))
+            .extracting(TimelineItem::assetId).contains(photo.assetId());
+
+        // M2 回收站是逐节点的:删目录不会级联标记子节点,时间线必须自行剪掉整棵子树
+        files.trash(principal(owner), dir.id());
+        assertThat(timeline.timeline(principal(owner), null, 200, null))
+            .extracting(TimelineItem::assetId).doesNotContain(photo.assetId());
+        assertThat(timeline.buckets(principal(owner), 2026, MediaKind.IMAGE)).isEmpty();
+
+        files.restore(principal(owner), dir.id());
+        assertThat(timeline.timeline(principal(owner), null, 200, null))
+            .extracting(TimelineItem::assetId).contains(photo.assetId());
+    }
+
+    @Test
+    void adminTimelineSeesAllTopLevelMediaWhileMembersSeeOnlyTheirOwn() throws Exception {
+        var admin = users.findByUsername("admin").orElseThrow();
+        var member = newMember();
+        var memberPhoto = uploadPhoto(member, "2037-10-01T08:00:00");
+        var adminPhoto = uploadPhoto(admin, "2037-10-02T08:00:00");
+
+        assertThat(timeline.timeline(principal(admin), null, 200, null))
+            .extracting(TimelineItem::assetId)
+            .contains(memberPhoto.assetId(), adminPhoto.assetId());
+        // ADMIN 的列表可见性与单条读取(AclService 短路)保持一致
+        assertThat(timeline.requireReadable(principal(admin), memberPhoto.assetId()).getId())
+            .isEqualTo(memberPhoto.assetId());
+
+        assertThat(timeline.timeline(principal(member), null, 200, null))
+            .extracting(TimelineItem::assetId)
+            .contains(memberPhoto.assetId())
+            .doesNotContain(adminPhoto.assetId());
+        assertThat(timeline.buckets(principal(member), 2037, MediaKind.IMAGE))
+            .containsExactly(new PeriodCount("2037-10", 1));
     }
 
     @Test

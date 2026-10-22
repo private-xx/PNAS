@@ -23,9 +23,9 @@ public interface MediaAssetRepository extends JpaRepository<MediaAsset, UUID> {
     /** 时间线第一页:递归展开可读子树后按 (taken_at, id) 倒序取一页。 */
     @Query(value = """
         WITH RECURSIVE readable AS (
-            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds)
+            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds) AND n.trashed_at IS NULL
             UNION
-            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id
+            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id WHERE c.trashed_at IS NULL
         )
         SELECT ma.id, ma.node_id, n.name, ma.kind, ma.taken_at, ma.width, ma.height,
                ma.duration_ms, ma.thumb_status, v.size_bytes
@@ -45,9 +45,9 @@ public interface MediaAssetRepository extends JpaRepository<MediaAsset, UUID> {
     /** 时间线后续页:游标元组 {@code (taken_at, id)} 严格小于上一页最后一条。 */
     @Query(value = """
         WITH RECURSIVE readable AS (
-            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds)
+            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds) AND n.trashed_at IS NULL
             UNION
-            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id
+            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id WHERE c.trashed_at IS NULL
         )
         SELECT ma.id, ma.node_id, n.name, ma.kind, ma.taken_at, ma.width, ma.height,
                ma.duration_ms, ma.thumb_status, v.size_bytes
@@ -70,9 +70,9 @@ public interface MediaAssetRepository extends JpaRepository<MediaAsset, UUID> {
     /** 某一年的月份桶计数(受可读子树与回收站约束)。 */
     @Query(value = """
         WITH RECURSIVE readable AS (
-            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds)
+            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds) AND n.trashed_at IS NULL
             UNION
-            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id
+            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id WHERE c.trashed_at IS NULL
         )
         SELECT to_char(ma.taken_at, 'YYYY-MM') AS period, count(*) AS cnt
         FROM media_assets ma
@@ -91,9 +91,9 @@ public interface MediaAssetRepository extends JpaRepository<MediaAsset, UUID> {
     /** 全部年份的月份桶计数(日期相册视图)。 */
     @Query(value = """
         WITH RECURSIVE readable AS (
-            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds)
+            SELECT n.id FROM nodes n WHERE n.id IN (:rootIds) AND n.trashed_at IS NULL
             UNION
-            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id
+            SELECT c.id FROM nodes c JOIN readable r ON c.parent_id = r.id WHERE c.trashed_at IS NULL
         )
         SELECT to_char(ma.taken_at, 'YYYY-MM') AS period, count(*) AS cnt
         FROM media_assets ma

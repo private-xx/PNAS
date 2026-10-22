@@ -126,9 +126,21 @@ public class MediaTimelineService {
         return asset;
     }
 
-    /** 我可读节点根集合:我的 home + 显式授予我或我所在组的节点(仅含 r 且不含拒绝 -)。 */
+    /**
+     * 我可读节点根集合(ADMIN 例外:全部未删除的顶层节点,与 {@code requireReadable} 的
+     * ADMIN 短路保持一致;非 ADMIN 为 home + 显式授予我/我所在组的节点,仅含 r 且不含拒绝 -)。
+     *
+     * <p><b>已知边界(M3 接受,DENY 边界):</b>ACL 根是"授予即可见"的近似——这里不按
+     * {@link AclService#hasPermission} 的语义重放 ancestor DENY / {@code inherited=false};
+     * 若某条目因祖先显式拒绝而实际不可读,它会出现在时间线里,但单条 {@link #requireReadable}
+     * 会返回 404。极少数"列表可见、打开 404"的组合接受为 M3 限制,待 M5 共享 UI 落地后统一。</p>
+     */
     Set<UUID> readableRoots(SessionPrincipal me) {
         Set<UUID> roots = new LinkedHashSet<>();
+        if (me.isAdmin()) {
+            nodes.findByParentIdIsNullAndTrashedAtIsNull().forEach(n -> roots.add(n.getId()));
+            return roots;
+        }
         nodes.findByParentIdIsNullAndOwnerIdAndTrashedAtIsNull(me.userId())
             .map(Node::getId)
             .ifPresent(roots::add);
