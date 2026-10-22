@@ -48,6 +48,7 @@
 | **D6** | 本机 Maven 用绝对路径 `/Users/xiao/hui/soft/maven3.8/bin/mvn`(3.8.1),配 `.tools/maven-settings.xml` 与 `.tools/jdk-21.0.12.1+1` | 本 shell PATH 极简,`mvn` 不在 PATH;经镜像源可拉依赖 |
 | **D7** | 自动入库范围:**所有**写入完成的图片/视频,时间线按 ACL 过滤;另提供管理员「重建媒体索引」回填既有文件 | 与 FR-MEDIA-07/SC-2 对齐,零操作;管理员可随时重扫 |
 | **D8** | 相册:M3 **只做日期相册**;地点相册、手动相册推迟 | 用户确认;GPS 仍提取入库 |
+| **D9** | EXIF 拍摄时间按 **JVM 默认时区**解释(本地墙上时间) | 单时区家庭 NAS 下时间线按本地日期分组正确;多时区留 M5 |
 
 ## 4. 数据模型(迁移 `V3__media.sql`)
 
@@ -100,6 +101,7 @@ media/
 
 - `MediaTypes.isMedia(name, mime)` → `IMAGE|VIDEO|NONE`;`canThumbnail(kind, name)` → JPEG/PNG/GIF/BMP/TIFF=true,HEIC/WEBP/视频=false(SKIPPED)。
 - `ExifReader.read(InputStream)` → `(takenAt, orientation, width, height, gpsLat, gpsLon)`;解析失败不抛业务异常,返回空结果(降级见 §7)。
+  - **时区语义(R13)**:EXIF 无时区,拍摄时间按 **JVM 默认时区**解释为本地墙上时间(家庭单时区;可配置时区留 M5);测试用 `ZoneId.systemDefault()` 固定期望值并覆盖「午夜附近仍落在同一本地日期」。
 - `ThumbnailService.generate(versionSha, size)`:
   - 目标路径 `derived/thumbs/<sha前2>/<versionSha>-<size>.jpg`;**已存在即返回**(幂等)
   - 解码用 `ImageIO.read`;Orientation 5/6/7/8 做 90°/180° 旋转;长边等比缩放到 size(不放大);JPEG 质量 0.82
@@ -186,7 +188,7 @@ media/
 - [ ] 后端全套件(含 M2 的 47 项)保持绿色;新增媒体测试全绿
 - [ ] 前端 `npm run build` 通过;时间线/查看器/相册/任务中心四个视图可用
 - [ ] 1000 张 fixture 的时间线首屏实测 ≤2s 并记录口径(预热后、局域网参考浏览器)
-- [ ] 交付与裁决记入 `docs/`(设计裁决 D1–D8、遗留项)
+- [ ] 交付与裁决记入 `docs/`(设计裁决 D1–D9、遗留项)
 
 ## 12. 风险与后续衔接
 
