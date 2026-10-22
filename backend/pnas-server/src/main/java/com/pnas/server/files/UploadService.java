@@ -12,6 +12,10 @@ import com.pnas.server.files.domain.UploadSession;
 import com.pnas.server.files.domain.VersionChunk;
 import com.pnas.server.iam.AclService;
 import com.pnas.server.iam.domain.User;
+import com.pnas.server.job.JobService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +26,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -31,23 +36,28 @@ import java.util.UUID;
 @Service
 public class UploadService {
 
+    private static final Logger log = LoggerFactory.getLogger(UploadService.class);
+
     private final UploadSessionRepository sessions;
     private final NodeRepository nodes;
     private final FileVersionRepository versions;
     private final VersionChunkRepository chunks;
     private final BlobStore blobs;
     private final AclService acl;
+    private final ObjectProvider<JobService> jobs;
     private final int chunkSize;
 
     public UploadService(UploadSessionRepository sessions, NodeRepository nodes,
                          FileVersionRepository versions, VersionChunkRepository chunks,
-                         BlobStore blobs, AclService acl, PnasProperties props) {
+                         BlobStore blobs, AclService acl, ObjectProvider<JobService> jobs,
+                         PnasProperties props) {
         this.sessions = sessions;
         this.nodes = nodes;
         this.versions = versions;
         this.chunks = chunks;
         this.blobs = blobs;
         this.acl = acl;
+        this.jobs = jobs;
         this.chunkSize = props.upload().chunkSize();
     }
 
@@ -179,6 +189,8 @@ public class UploadService {
 
         file.setSizeBytes(s.getTotalSize());
         s.setState("COMPLETE");
+        // 正常提交路径才触发扫描;幂等分支(会话已 COMPLETE)不重复入队
+        enqueueMediaScan(file.getId(), fv.getId());
         return new Completed(file.getId(), nextVer, s.getTotalSize(), dedup);
     }
 
@@ -186,6 +198,17 @@ public class UploadService {
     public void cancel(UUID actorId, UUID uploadId) {
         UploadSession s = requireOpenFor(uploadId, actorId);
         s.setState("CANCELLED");
+    }
+
+    /** 上传完成后入队媒体扫描;入队失败只告警,绝不让上传失败(可用 media.reindex 兜底)。 */
+    private void enqueueMediaScan(UUID nodeId, UUID versionId) {
+        try {
+            jobs.getObject().enqueue("media.scan", Map.of(
+                "nodeId", nodeId.toString(),
+                "versionId", versionId.toString()), 10, 0);
+        } catch (Exception e) {
+            log.warn("入队 media.scan 失败,nodeId={} versionId={}", nodeId, versionId, e);
+        }
     }
 
     /** 会话必须属于该主体;**加行锁**,用于 complete 的幂等与并发串行化。 */

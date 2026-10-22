@@ -19,4 +19,9 @@ public interface NodeRepository extends JpaRepository<Node, UUID> {
     List<Node> findByOwnerIdAndTrashedAtIsNotNullOrderByTrashedAtDesc(UUID ownerId);
 
     boolean existsByParentIdAndNameAndTrashedAtIsNull(UUID parentId, String name);
+
+    /** 重建索引用:按 id 顺序分页遍历全部节点。 */
+    List<Node> findTop200ByOrderByIdAsc();
+
+    List<Node> findTop200ByIdGreaterThanOrderByIdAsc(UUID id);
 }
