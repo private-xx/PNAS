@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -62,7 +63,7 @@ public class MediaController {
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "60") int limit,
             @RequestParam(required = false) String kind) {
-        return timeline.timeline(me, cursor, limit, kind == null ? null : MediaKind.valueOf(kind));
+        return timeline.timeline(me, cursor, limit, parseKind(kind));
     }
 
     @GetMapping("/timeline/buckets")
@@ -71,7 +72,7 @@ public class MediaController {
             @RequestParam(defaultValue = "0") int year,
             @RequestParam(required = false) String kind) {
         int y = year == 0 ? java.time.Year.now().getValue() : year;
-        return timeline.buckets(me, y, kind == null ? null : MediaKind.valueOf(kind));
+        return timeline.buckets(me, y, parseKind(kind));
     }
 
     @GetMapping("/albums/dates")
@@ -153,5 +154,18 @@ public class MediaController {
         }
         UUID jobId = jobs.enqueue("media.reindex", Map.of(), 1, 0);
         return ResponseEntity.accepted().body(Map.of("jobId", jobId.toString()));
+    }
+
+    /** kind 参数容错:缺省为空;大小写不敏感;非法值映射为统一 400 错误体而非 500。 */
+    private static MediaKind parseKind(String kind) {
+        if (kind == null || kind.isBlank()) {
+            return null;
+        }
+        try {
+            return MediaKind.valueOf(kind.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST,
+                "kind 仅支持 IMAGE 或 VIDEO");
+        }
     }
 }

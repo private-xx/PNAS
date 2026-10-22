@@ -172,6 +172,25 @@ class MediaApiIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void invalidKindReturns400AndLowercaseIsAccepted() throws Exception {
+        var admin = login("admin", "admin-secret");
+
+        mvc.perform(get("/api/v1/media/timeline").param("kind", "bogus")
+                .header("Cookie", admin.cookie()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("bad_request"));
+
+        mvc.perform(get("/api/v1/media/timeline/buckets").param("kind", "bogus")
+                .header("Cookie", admin.cookie()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("bad_request"));
+
+        mvc.perform(get("/api/v1/media/timeline").param("kind", "image")
+                .header("Cookie", admin.cookie()))
+            .andExpect(status().isOk());
+    }
+
+    @Test
     void memberCannotSeeOrFetchOthersMedia() throws Exception {
         String assetId = uploadPhotoAndIndex(Instant.parse("2026-06-02T10:00:00Z"));
         String member = "media-bob-" + UUID.randomUUID().toString().substring(0, 8);
