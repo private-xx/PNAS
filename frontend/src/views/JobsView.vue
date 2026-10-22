@@ -12,7 +12,9 @@ const state = ref('')
 const loading = ref(false)
 const reindexing = ref(false)
 let timer: number | undefined
-let inFlight = false
+let reloadInFlight = false
+let pendingReload: { silent: boolean } | null = null
+let disposed = false
 
 const stateOptions: { label: string; value: jobsApi.JobState }[] = [
   { label: '排队中', value: 'QUEUED' },
@@ -22,7 +24,7 @@ const stateOptions: { label: string; value: jobsApi.JobState }[] = [
   { label: '死信', value: 'DEAD' },
 ]
 
-const stateLabels: Record<string, string> = {
+const stateLabels: Record<jobsApi.JobState, string> = {
   QUEUED: '排队中',
   RUNNING: '执行中',
   SUCCESS: '成功',
@@ -30,12 +32,20 @@ const stateLabels: Record<string, string> = {
   DEAD: '死信',
 }
 
-const stateTagTypes: Record<string, 'primary' | 'success' | 'warning' | 'danger' | 'info'> = {
+const stateTagTypes: Record<jobsApi.JobState, 'primary' | 'success' | 'warning' | 'danger' | 'info'> = {
   QUEUED: 'info',
   RUNNING: 'primary',
   SUCCESS: 'success',
   FAILED: 'warning',
   DEAD: 'danger',
+}
+
+function stateLabel(value: jobsApi.JobState): string {
+  return stateLabels[value]
+}
+
+function stateTagType(value: jobsApi.JobState): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
+  return stateTagTypes[value]
 }
 
 function formatTime(iso: string | null): string {
@@ -45,23 +55,47 @@ function formatTime(iso: string | null): string {
 }
 
 async function reload(silent = false): Promise<void> {
+  if (disposed) return
+  // 已有请求在飞:排队一次(非静默优先),等它结束后立即补拉,避免刷新被丢弃。
+  if (reloadInFlight) {
+    pendingReload = { silent: (pendingReload?.silent ?? true) && silent }
+    return
+  }
+  reloadInFlight = true
+  const requestedState = state.value
   // 自动刷新不显示 loading 遮罩,避免表格每 5 秒闪烁一次。
-  if (inFlight) return
-  inFlight = true
   if (!silent) loading.value = true
   try {
-    jobs.value = await jobsApi.listJobs(state.value || undefined)
+    const result = await jobsApi.listJobs(requestedState || undefined)
+    // 筛选在请求期间被切换时丢弃旧结果,由排队的 reload 按新筛选拉取。
+    if (requestedState === state.value) {
+      jobs.value = result
+    }
   } catch (e) {
     if (!silent) ElMessage.error(errorMessage(e, '加载任务失败'))
   } finally {
-    inFlight = false
+    reloadInFlight = false
     if (!silent) loading.value = false
+    const pending = pendingReload
+    pendingReload = null
+    if (pending && !disposed) {
+      void reload(pending.silent)
+    }
+  }
+}
+
+/** 用接口返回的最新任务替换表格中的对应行,避免刷新排队时操作按钮状态滞后。 */
+function patchJob(updated: jobsApi.JobDto): void {
+  const index = jobs.value.findIndex((job) => job.id === updated.id)
+  if (index !== -1) {
+    jobs.value[index] = updated
   }
 }
 
 async function retry(id: string): Promise<void> {
   try {
-    await jobsApi.retryJob(id)
+    const updated = await jobsApi.retryJob(id)
+    patchJob(updated)
     ElMessage.success('已重试')
     await reload()
   } catch (e) {
@@ -71,7 +105,8 @@ async function retry(id: string): Promise<void> {
 
 async function cancel(id: string): Promise<void> {
   try {
-    await jobsApi.cancelJob(id)
+    const updated = await jobsApi.cancelJob(id)
+    patchJob(updated)
     ElMessage.success('已取消')
     await reload()
   } catch (e) {
@@ -99,6 +134,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
   window.clearInterval(timer)
 })
 </script>
@@ -119,8 +155,8 @@ onUnmounted(() => {
       <el-table-column prop="type" label="类型" width="180" />
       <el-table-column label="状态" width="110">
         <template #default="{ row }">
-          <el-tag :type="stateTagTypes[row.state] ?? 'info'" size="small">
-            {{ stateLabels[row.state] ?? row.state }}
+          <el-tag :type="stateTagType(row.state)" size="small">
+            {{ stateLabel(row.state) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -140,6 +176,7 @@ onUnmounted(() => {
             size="small"
             text
             type="primary"
+            :aria-label="`重试任务 ${row.type} ${row.id.slice(0, 8)}`"
             @click="retry(row.id)"
           >
             重试
@@ -149,6 +186,7 @@ onUnmounted(() => {
             size="small"
             text
             type="danger"
+            :aria-label="`取消任务 ${row.type} ${row.id.slice(0, 8)}`"
             @click="cancel(row.id)"
           >
             取消

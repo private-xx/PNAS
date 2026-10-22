@@ -23,7 +23,7 @@ async function logout() {
         <router-link to="/">文件</router-link>
         <router-link to="/media">媒体</router-link>
         <router-link to="/media/albums">相册</router-link>
-        <router-link to="/admin/jobs">任务</router-link>
+        <router-link v-if="session.isAdmin" to="/admin/jobs">任务</router-link>
       </nav>
       <div class="spacer" />
       <span class="user">{{ session.displayName || session.username }}</span>
