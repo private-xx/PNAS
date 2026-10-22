@@ -17,20 +17,18 @@ onMounted(async () => {
 
 <template>
   <div class="albums">
-    <router-link to="/media"><el-button text>← 返回时间线</el-button></router-link>
+    <div class="header">
+      <h1 class="title">日期相册</h1>
+      <router-link to="/media"><el-button>查看时间线</el-button></router-link>
+    </div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <div v-for="year in years" :key="year.year" class="year">
       <h2>{{ year.year }} 年</h2>
       <div class="months">
-        <router-link
-          v-for="month in year.months"
-          :key="month.period"
-          :to="{ path: '/media', query: { month: month.period } }"
-          class="month"
-        >
+        <div v-for="month in year.months" :key="month.period" class="month">
           <div class="label">{{ month.period.slice(5) }} 月</div>
           <div class="count">{{ month.count }} 项</div>
-        </router-link>
+        </div>
       </div>
     </div>
     <div v-if="!error && years.length === 0" class="hint">暂无相册</div>
@@ -40,6 +38,17 @@ onMounted(async () => {
 <style scoped>
 .albums {
   padding: 1rem;
+}
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.title {
+  font-size: 1.15rem;
+  margin: 0.5rem 0;
 }
 .year h2 {
   font-size: 1.05rem;
@@ -56,7 +65,6 @@ onMounted(async () => {
   background: #fff;
   border: 1px solid #ebeef5;
   border-radius: 6px;
-  text-decoration: none;
   color: inherit;
 }
 .month .label {
