@@ -54,8 +54,10 @@ public class DeviceService {
     public void revoke(SessionPrincipal me, UUID deviceId) {
         Device device = devices.findByIdAndUserId(deviceId, me.userId())
             .orElseThrow(this::notFound);
-        device.markRevoked();
-        devices.save(device);
+        if (!device.isRevoked()) {
+            device.markRevoked();
+            devices.save(device);
+        }
     }
 
     @Transactional(readOnly = true)
