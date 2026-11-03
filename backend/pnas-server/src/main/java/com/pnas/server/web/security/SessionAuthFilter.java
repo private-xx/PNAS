@@ -3,7 +3,6 @@ package com.pnas.server.web.security;
 import com.pnas.server.auth.ServerSessionRepository;
 import com.pnas.server.auth.SessionPrincipal;
 import com.pnas.server.backup.DeviceRepository;
-import com.pnas.server.backup.domain.Device;
 import com.pnas.server.iam.UserRepository;
 import com.pnas.server.iam.domain.User;
 import jakarta.servlet.FilterChain;
@@ -41,8 +40,12 @@ public class SessionAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res,
                                     FilterChain chain) throws ServletException, IOException {
         String authorization = req.getHeader("Authorization");
-        if (authorization != null && authorization.startsWith("Bearer ")) {
-            String raw = authorization.substring("Bearer ".length()).trim();
+        // scheme 不区分大小写;只要 header 呈 Bearer 形态,就绝不再回退到 Cookie 认证
+        // (空令牌、畸形令牌同样按未认证处理),避免两种凭证语义混淆。
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer", 0, 6)) {
+            // 清掉可能残留的线程上下文,保证 Bearer 分支的认证结果只来自本次解析。
+            SecurityContextHolder.clearContext();
+            String raw = authorization.length() > 6 ? authorization.substring(6).trim() : "";
             // 空白令牌不查库、不认证,保持未认证 → 由入口点统一返回 401。
             if (!raw.isEmpty()) {
                 devices.findByPatHashAndRevokedAtIsNull(sha256(raw)).ifPresent(device ->
@@ -56,7 +59,9 @@ public class SessionAuthFilter extends OncePerRequestFilter {
                         SecurityContextHolder.getContext().setAuthentication(auth);
                         req.setAttribute(SessionPrincipal.class.getName(), principal);
                         req.setAttribute("pnas.deviceId", device.getId());
-                        touchThrottled(device);
+                        // 定向 UPDATE:仅在未吊销且超过 60s 节流窗口时刷新,避免读-改-写
+                        // 把并发吊销的设备又"复活"。
+                        devices.touch(device.getId(), Instant.now(), Instant.now().minusSeconds(60));
                     }));
             }
             chain.doFilter(req, res);
@@ -82,15 +87,6 @@ public class SessionAuthFilter extends OncePerRequestFilter {
             });
         }
         chain.doFilter(req, res);
-    }
-
-    /** 同一设备最多每 60 秒刷新一次 lastSeenAt,避免每个 API 请求都写库。 */
-    private void touchThrottled(Device device) {
-        Instant last = device.getLastSeenAt();
-        if (last == null || last.isBefore(Instant.now().minusSeconds(60))) {
-            device.touch();
-            devices.save(device);
-        }
     }
 
     public static String sha256(String value) {

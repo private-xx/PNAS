@@ -3,11 +3,12 @@ package com.pnas.server.iam.domain;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity @Table(name = "users")
-@Getter @NoArgsConstructor
+@Getter @Setter @NoArgsConstructor
 public class User {
     public enum Role { ADMIN, MEMBER }
     public enum Status { ACTIVE, DISABLED }
