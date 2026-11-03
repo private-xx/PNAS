@@ -16,7 +16,7 @@ API="$BASE/api/v1"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JAVA_BIN=""
 
-WORK="$(mktemp -d)"
+WORK=$(mktemp -d) || { echo "无法创建临时目录" >&2; exit 2; }
 PASS=0
 FAIL=0
 
@@ -247,7 +247,11 @@ echo "[6] verify 与 restore"
 run_agent verify --config "$WORK/config.json" --all
 RC=$?
 check "verify 退出码" "$RC" "0"
+VERIFY_LINE=$(grep -o 'checked=[0-9]* passed=[0-9]* failed=[0-9]*' "$WORK/agent.out" | head -1)
+echo "  verify 输出: ${VERIFY_LINE:-<未找到>}"
 check_contains "verify 无失败" "$WORK/agent.out" "failed=0"
+check_contains "verify 实际检查 4 个文件" "$WORK/agent.out" "checked=4"
+check_contains "verify 4 个文件全部通过" "$WORK/agent.out" "passed=4"
 
 rm -rf "$WORK/restored"
 run_agent restore --config "$WORK/config.json" --path Files/a.txt --dest "$WORK/restored"

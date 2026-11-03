@@ -10,7 +10,7 @@
 | M1 | 架构设计 | ✅ [architecture-design.md](architecture-design.md) v0.3,ADR-01~12 全部确认,与需求 v0.3 同步 |
 | M2 | MVP 实现 | ✅ **已合并进 `main`**(PR #1,合并提交 `dc5afe5`):14 任务全部实现并逐任务评审 + 三段最终评审;后端全套件 **47/47**、前端构建通过、端到端验收 **PASS=23/FAIL=0**;交付与决策记录见 [m2-delivery.md](m2-delivery.md) |
 | M3 | 媒体(时间线 / 日期相册 / 缩略图 / 视频播放) | ✅ **已合并进 `main`**(PR #2,合并提交 `3b12e96`):13 个任务实现完成;后端全套件 **126/126**、前端构建 PASS;验收 **PASS=42 / FAIL=0**;SC-3 时间线首屏 1000 条实测中位数 **0.0287s / 修复后复测 0.0217s**(预算 ≤2s);交付与决策见 [m3-delivery.md](m3-delivery.md) |
-| M4 | 备份(桌面 Agent) | 🔄 **M4a 完成**(分支 `m4a-backup`,待合并):后端全套件 **156/156**、Agent **52/52**、E2E 验收 **PASS=34/FAIL=0**;macOS app-image 打包通过(dmg 受本机沙箱限制,见下);Windows 打包文档未实测;其余备份范围待启动 |
+| M4 | 备份(桌面 Agent) | 🔄 **M4a 完成**(分支 `m4a-backup`,待合并):后端全套件 **156/156**、Agent **52/52**、E2E 验收 **PASS=36/FAIL=0**;macOS app-image 打包通过(dmg 受本机沙箱限制,见下);Windows 打包文档未实测;其余备份范围待启动 |
 | M5–M6 | 流媒体加固 / 验收 | 待启动 |
 | M7 | 后续立项(镜像同步、移动通道评估等 Could 项) | 待启动 |
 
@@ -22,11 +22,11 @@
 - **质量门禁**:
   - 后端全套件(HEAD `191c5db`,`mvn -o -s ../.tools/maven-settings.xml -pl pnas-server -am test`):**`Tests run: 156, Failures: 0, Errors: 0, Skipped: 0`**,BUILD SUCCESS(M3 为 126;M4a 新增 30 项)。
   - Agent 模块(`cd agent && mvn -o -s ../.tools/maven-settings.xml test`):**`Tests run: 52, Failures: 0, Errors: 0, Skipped: 0`**(7 个测试类)。
-- **E2E 验收**:`scripts/acceptance-m4.sh`(幂等;`BASE` 参数,默认 `http://localhost:8080`;无 jq 依赖,python3 解析 JSON)。隔离环境:PostgreSQL 容器 `pnas-acc-db`(库 `pnas`,已含 V1–V4)、server `:8092`、`PNAS_DATA_DIR=/tmp/pnas-m4a-e2e`、`PNAS_REQUIRE_TLS=false`;同一构建连续两次 **PASS=34 / FAIL=0**。覆盖:
+- **E2E 验收**:`scripts/acceptance-m4.sh`(幂等;`BASE` 参数,默认 `http://localhost:8080`;无 jq 依赖,python3 解析 JSON)。隔离环境:PostgreSQL 容器 `pnas-acc-db`(库 `pnas`,已含 V1–V4)、server `:8092`、`PNAS_DATA_DIR=/tmp/pnas-m4a-e2e`、`PNAS_REQUIRE_TLS=false`;同一构建连续两次 **PASS=36 / FAIL=0**。覆盖:
   - admin 登录 HTTP 200 + CSRF 头;创建设备 HTTP 200 并返回设备 ID/令牌;
-  - 4 个源文件(含 5,000,000 字节大文件)首次备份退出码 0、`uploaded=4`;服务端节点树 `/自动备份/<deviceId>/Files/{a.txt,b.txt,big.bin,sub/c.txt}` 逐一经 API 断言,`big.bin` 大小 = 5,000,000;
+  - 4 个源文件(含 5,000,000 字节大文件)首次备份退出码 0、`uploaded=4`;服务端节点树 `/自动备份/<deviceId>/Files/` 经 API 断言 4 个条目齐备(`a.txt`、`b.txt`、`big.bin`、`sub`)、`sub` 目录存在、`big.bin` 大小 = 5,000,000;`b.txt`/`big.bin`/`sub/c.txt` 的内容由后续 `verify --all` 下载并比对清单哈希覆盖(`sub/c.txt` 未单独走节点 API);
   - 修改 `a.txt` 后二次备份退出码 0、`uploaded=1 skipped=3`、`a.txt` 最新版本 = 2(验证文件级增量);
-  - `verify --all` 退出码 0、`checked=4 passed=4 failed=0`;`restore --path Files/a.txt` 退出码 0 且 `cmp` 与源文件一致;
+  - `verify --all` 退出码 0,脚本断言输出含 `checked=4 passed=4 failed=0`(打印该行);`restore --path Files/a.txt` 退出码 0 且 `cmp` 与源文件一致;
   - 吊销设备 HTTP 204;随后备份返回 HTTP 401、agent 退出码 2。
   - 环境备注:本机 `:8081` 被 2026-09-11 启动的旧 `pnas_fresh` 服务占用、`:8082` 有 node 进程监听 `[::1]`,故验收服务起在 `:8092`;未触碰 `:8080` 的既有服务。
 - **打包**:

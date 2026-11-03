@@ -1,7 +1,8 @@
 # PNAS Agent — Windows 打包与开机运行
 
-> 状态:**未实测**。本仓库的 macOS `.dmg` 已由 `agent/packaging/package-macos.sh` 验证;
-> Windows 侧仅给出等价命令与步骤,未在 Windows 机器/CI 上执行过。首次部署前请按本文
+> 状态:**未实测**。本仓库的 macOS **app-image**(`--type app-image`)已验证并实际跑过备份;
+> `.dmg` 需在非沙箱 macOS 终端执行 `agent/packaging/package-macos.sh` 生成(本环境 `hdiutil`
+> 被沙箱拦截)。Windows 侧仅给出等价命令与步骤,未在 Windows 机器/CI 上执行过。首次部署前请按本文
 > 在目标机器上逐条验证,尤其注意路径、JDK 位数与任务计划程序的权限。
 
 ## 1. 前置
@@ -29,7 +30,15 @@ cd ..
 set OUT=agent\target\package
 if exist "%OUT%" rmdir /s /q "%OUT%"
 mkdir "%OUT%\bundle\lib"
-copy agent\target\pnas-agent-0.1.0-SNAPSHOT.jar "%OUT%\bundle\pnas-agent.jar"
+
+rem 产物名含版本号(pom 未固定 finalName,如 pnas-agent-0.1.0-SNAPSHOT.jar);
+rem 用通配符取实际的 pnas-agent-*.jar(以下按批处理语法;交互式 CMD 里把 %%f 写成 %f)
+set "AGENT_JAR="
+for %%f in (agent\target\pnas-agent-*.jar) do set "AGENT_JAR=%%f"
+if not defined AGENT_JAR (
+  echo 未找到 agent jar: agent\target\pnas-agent-*.jar & exit /b 1
+)
+copy "%AGENT_JAR%" "%OUT%\bundle\pnas-agent.jar"
 
 rem Jackson 三个 jar 可从本地 Maven 仓库复制(.m2\repository\com\fasterxml\jackson\...)
 copy "%USERPROFILE%\.m2\repository\com\fasterxml\jackson\core\jackson-databind\2.17.2\jackson-databind-2.17.2.jar" "%OUT%\bundle\lib\"
