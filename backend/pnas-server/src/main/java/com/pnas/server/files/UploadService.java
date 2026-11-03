@@ -28,6 +28,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -75,6 +76,16 @@ public class UploadService {
     /** 建上传会话。调用方必须先校验对 destParent 的写权限(见 Task 7 Controller)。 */
     @Transactional
     public UUID start(User owner, UUID destParentId, String filename, long totalSize) {
+        return start(owner, destParentId, filename, totalSize, null);
+    }
+
+    /**
+     * 建上传会话(携带源文件 mtime;旧客户端走 4 参重载传 null)。
+     * 事务注解保留在重载上:4 参版本在同一事务内经 this 调用本方法,自调用不经代理。
+     */
+    @Transactional
+    public UUID start(User owner, UUID destParentId, String filename, long totalSize,
+                      Instant sourceMtime) {
         Node dir = nodes.findById(destParentId)
             .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND,
                 HttpStatus.NOT_FOUND, "目标目录不存在"));
@@ -94,6 +105,7 @@ public class UploadService {
         s.setDestParent(dir);
         s.setFilename(filename);
         s.setTotalSize(totalSize);
+        s.setSourceMtime(sourceMtime);
         s.setChunkSize(chunkSize);
         s.setState("OPEN");
         s.setReceivedChunks(new ArrayList<>());
@@ -183,6 +195,7 @@ public class UploadService {
         fv.setMimeType("application/octet-stream");
         fv.setCreatedBy(user);
         fv.setManifestSha256(manifestHex);
+        fv.setSourceMtime(s.getSourceMtime());
         versions.save(fv);
 
         List<VersionChunk> rows = new ArrayList<>();

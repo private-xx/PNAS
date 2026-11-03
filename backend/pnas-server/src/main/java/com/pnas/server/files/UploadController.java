@@ -10,6 +10,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.InputStream;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
@@ -28,7 +29,8 @@ public class UploadController {
         this.users = users;
     }
 
-    public record StartUpload(UUID destParentId, String filename, long size) {}
+    /** sourceMtime 可空:旧客户端不传时版本保留 NULL。 */
+    public record StartUpload(UUID destParentId, String filename, long size, Instant sourceMtime) {}
 
     @PostMapping
     public Map<String, UUID> start(@AuthenticationPrincipal SessionPrincipal me,
@@ -36,7 +38,8 @@ public class UploadController {
         files.assertCan(me, req.destParentId(), 'w');
         var owner = users.findById(me.userId()).orElseThrow(() -> new BusinessException(
             ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "用户不存在"));
-        UUID uploadId = uploads.start(owner, req.destParentId(), req.filename(), req.size());
+        UUID uploadId = uploads.start(owner, req.destParentId(), req.filename(), req.size(),
+            req.sourceMtime());
         return Map.of("uploadId", uploadId);
     }
 
