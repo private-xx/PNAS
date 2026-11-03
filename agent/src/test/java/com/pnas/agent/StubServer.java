@@ -17,7 +17,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** 测试用内存服务:节点树/清单/上传会话/运行记录。 */
@@ -38,6 +40,7 @@ public final class StubServer implements AutoCloseable {
     private final Map<UUID, Dir> dirs = new HashMap<>();
     private final Map<UUID, List<FileDto>> files = new HashMap<>();
     private final Map<UUID, Upload> uploads = new HashMap<>();
+    private final Set<UUID> corrupted = ConcurrentHashMap.newKeySet();
 
     /** 非空时携带该 token 的请求一律 401。 */
     public volatile String revokedToken;
@@ -267,7 +270,21 @@ public final class StubServer implements AutoCloseable {
             send(ex, 404, "{}");
             return;
         }
-        sendRaw(ex, 200, file.content());
+        sendRaw(ex, 200, corrupted.contains(nodeId) ? damaged(file.content()) : file.content());
+    }
+
+    /** 测试种子:让该节点的下载内容与清单哈希不一致(用于校验失败用例)。 */
+    public void corrupt(UUID nodeId) {
+        corrupted.add(nodeId);
+    }
+
+    private static byte[] damaged(byte[] content) {
+        if (content.length == 0) {
+            return new byte[] {1};
+        }
+        byte[] copy = content.clone();
+        copy[0] ^= 0xff;
+        return copy;
     }
 
     /** 由父目录反推 relPath(相对 ROOT)。 */

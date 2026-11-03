@@ -8,6 +8,8 @@ import com.pnas.agent.remote.ManifestClient;
 import com.pnas.agent.remote.NodeClient;
 import com.pnas.agent.remote.RunClient;
 import com.pnas.agent.remote.UploadClient;
+import com.pnas.agent.restore.Restorer;
+import com.pnas.agent.restore.Verifier;
 import com.pnas.agent.run.RunMode;
 import com.pnas.agent.run.Runner;
 import com.pnas.agent.scan.Scanner;
@@ -50,6 +52,8 @@ public final class Main {
             case "status" -> 0;
             case "run" -> daemon(args);
             case "backup" -> backup(args);
+            case "restore" -> restore(args);
+            case "verify" -> verify(args);
             default -> throw new IllegalArgumentException("未知子命令: " + args[0]);
         };
     }
@@ -71,12 +75,8 @@ public final class Main {
             }
         }
 
-        AgentConfig config;
-        try {
-            config = AgentConfig.load(configFile);
-            config.validate();
-        } catch (RuntimeException e) {
-            System.err.println("配置错误: " + e.getMessage());
+        AgentConfig config = loadConfig(configFile);
+        if (config == null) {
             return 2;
         }
 
@@ -150,12 +150,8 @@ public final class Main {
             throw new IllegalArgumentException("当前仅支持 backup --once");
         }
 
-        AgentConfig config;
-        try {
-            config = AgentConfig.load(configFile);
-            config.validate();
-        } catch (RuntimeException e) {
-            System.err.println("配置错误: " + e.getMessage());
+        AgentConfig config = loadConfig(configFile);
+        if (config == null) {
             return 2;
         }
 
@@ -174,12 +170,134 @@ public final class Main {
         }
     }
 
-    /** 按配置装配 HTTP 客户端与 Runner(backup 与 run 共用同一接线)。 */
+    /** {@code restore --config <file> --path <relPath> --dest <dir> [--overwrite]}. */
+    private static int restore(String[] args) {
+        Path configFile = defaultConfigFile();
+        String relPath = null;
+        Path dest = null;
+        boolean overwrite = false;
+        for (int i = 1; i < args.length; i++) {
+            switch (args[i]) {
+                case "--overwrite" -> overwrite = true;
+                case "--config" -> configFile = Path.of(requireValue(args, ++i, "--config"));
+                case "--path" -> relPath = requireValue(args, ++i, "--path");
+                case "--dest" -> dest = Path.of(requireValue(args, ++i, "--dest"));
+                default -> throw new IllegalArgumentException("未知参数: " + args[i]);
+            }
+        }
+        if (relPath == null || relPath.isBlank()) {
+            throw new IllegalArgumentException("--path 不能为空");
+        }
+        if (dest == null) {
+            throw new IllegalArgumentException("--dest 不能为空");
+        }
+
+        AgentConfig config = loadConfig(configFile);
+        if (config == null) {
+            return 2;
+        }
+
+        try {
+            int count = restorer(config).restore(config.deviceId(), relPath, dest, overwrite);
+            System.out.printf("恢复完成: files=%d dest=%s%n", count, dest);
+            return 0;
+        } catch (AgentException e) {
+            System.err.println("远程调用失败(" + e.status() + "): " + e.getMessage());
+            return 2;
+        } catch (Exception e) {
+            System.err.println("恢复失败: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    /** {@code verify --config <file> [--all | --limit N]}:默认全量,失败时退出码 1。 */
+    private static int verify(String[] args) {
+        Path configFile = defaultConfigFile();
+        int limit = 0;
+        for (int i = 1; i < args.length; i++) {
+            switch (args[i]) {
+                case "--all" -> limit = 0;
+                case "--config" -> configFile = Path.of(requireValue(args, ++i, "--config"));
+                case "--limit" -> {
+                    int value;
+                    try {
+                        value = Integer.parseInt(requireValue(args, ++i, "--limit"));
+                    } catch (NumberFormatException e) {
+                        throw new IllegalArgumentException("--limit 需要正整数");
+                    }
+                    if (value <= 0) {
+                        throw new IllegalArgumentException("--limit 必须为正数: " + value);
+                    }
+                    limit = value;
+                }
+                default -> throw new IllegalArgumentException("未知参数: " + args[i]);
+            }
+        }
+
+        AgentConfig config = loadConfig(configFile);
+        if (config == null) {
+            return 2;
+        }
+
+        try {
+            Verifier.VerifyResult result = verifier(config).verify(config.deviceId(), limit);
+            System.out.printf("校验完成: checked=%d passed=%d failed=%d%n",
+                result.checked(), result.passed(), result.failed().size());
+            if (!result.failed().isEmpty()) {
+                for (String failed : result.failed()) {
+                    System.err.println("校验失败: " + failed);
+                }
+                return 1;
+            }
+            return 0;
+        } catch (AgentException e) {
+            System.err.println("远程调用失败(" + e.status() + "): " + e.getMessage());
+            return 2;
+        } catch (Exception e) {
+            System.err.println("校验失败: " + e.getMessage());
+            return 2;
+        }
+    }
+
+    private static String requireValue(String[] args, int index, String flag) {
+        if (index >= args.length) {
+            throw new IllegalArgumentException(flag + " 需要参数值");
+        }
+        return args[index];
+    }
+
+    private static AgentConfig loadConfig(Path configFile) {
+        try {
+            AgentConfig config = AgentConfig.load(configFile);
+            config.validate();
+            return config;
+        } catch (RuntimeException e) {
+            System.err.println("配置错误: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** 按配置装配 HTTP 客户端(backup/run/restore/verify 共用同一接线)。 */
+    private static HttpJson http(AgentConfig config) {
+        return new HttpJson(config.serverUrl(), config.token());
+    }
+
+    /** 按配置装配 Runner。 */
     private static Runner runner(AgentConfig config) {
-        HttpJson http = new HttpJson(config.serverUrl(), config.token());
+        HttpJson http = http(config);
         return new Runner(config, new Scanner(), new Planner(),
             new ManifestClient(http), new UploadClient(http), new NodeClient(http),
             new RunClient(http), Scanner.CHUNK_SIZE);
+    }
+
+    private static Restorer restorer(AgentConfig config) {
+        HttpJson http = http(config);
+        return new Restorer(new ManifestClient(http), new NodeClient(http), Scanner.CHUNK_SIZE);
+    }
+
+    private static Verifier verifier(AgentConfig config) {
+        HttpJson http = http(config);
+        return new Verifier(new ManifestClient(http), new NodeClient(http), Scanner.CHUNK_SIZE);
     }
 
     private static Path defaultConfigFile() {
