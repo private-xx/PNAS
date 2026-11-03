@@ -2,6 +2,8 @@ package com.pnas.server.web.security;
 
 import com.pnas.server.auth.ServerSessionRepository;
 import com.pnas.server.auth.SessionPrincipal;
+import com.pnas.server.backup.DeviceRepository;
+import com.pnas.server.backup.domain.Device;
 import com.pnas.server.iam.UserRepository;
 import com.pnas.server.iam.domain.User;
 import jakarta.servlet.FilterChain;
@@ -26,15 +28,40 @@ public class SessionAuthFilter extends OncePerRequestFilter {
 
     private final ServerSessionRepository sessions;
     private final UserRepository users;
+    private final DeviceRepository devices;
 
-    public SessionAuthFilter(ServerSessionRepository sessions, UserRepository users) {
+    public SessionAuthFilter(ServerSessionRepository sessions, UserRepository users,
+                             DeviceRepository devices) {
         this.sessions = sessions;
         this.users = users;
+        this.devices = devices;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res,
                                     FilterChain chain) throws ServletException, IOException {
+        String authorization = req.getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            String raw = authorization.substring("Bearer ".length()).trim();
+            // 空白令牌不查库、不认证,保持未认证 → 由入口点统一返回 401。
+            if (!raw.isEmpty()) {
+                devices.findByPatHashAndRevokedAtIsNull(sha256(raw)).ifPresent(device ->
+                    users.findById(device.getUser().getId()).ifPresent(u -> {
+                        if (u.getStatus() != User.Status.ACTIVE) return;
+                        var principal = new SessionPrincipal(u.getId(), u.getUsername(),
+                            u.getRole(), null);
+                        var auth = new UsernamePasswordAuthenticationToken(
+                            principal, null, List.of(
+                            new SimpleGrantedAuthority("ROLE_" + u.getRole().name())));
+                        SecurityContextHolder.getContext().setAuthentication(auth);
+                        req.setAttribute(SessionPrincipal.class.getName(), principal);
+                        req.setAttribute("pnas.deviceId", device.getId());
+                        touchThrottled(device);
+                    }));
+            }
+            chain.doFilter(req, res);
+            return;
+        }
         String cookieValue = readCookieValue(req);
         if (cookieValue != null) {
             String hash = sha256(cookieValue);
@@ -55,6 +82,15 @@ public class SessionAuthFilter extends OncePerRequestFilter {
             });
         }
         chain.doFilter(req, res);
+    }
+
+    /** 同一设备最多每 60 秒刷新一次 lastSeenAt,避免每个 API 请求都写库。 */
+    private void touchThrottled(Device device) {
+        Instant last = device.getLastSeenAt();
+        if (last == null || last.isBefore(Instant.now().minusSeconds(60))) {
+            device.touch();
+            devices.save(device);
+        }
     }
 
     public static String sha256(String value) {
