@@ -37,4 +37,7 @@ public class FileVersion {
 
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "source_mtime")
+    private Instant sourceMtime;
 }
