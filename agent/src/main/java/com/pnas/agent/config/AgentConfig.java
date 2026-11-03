@@ -28,7 +28,10 @@ public record AgentConfig(String serverUrl, String token, String deviceId, List<
 
     public void save(Path file) {
         try {
-            Files.createDirectories(file.getParent());
+            Path parent = file.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             MAPPER.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), this);
         } catch (IOException e) {
             throw new UncheckedIOException("写入配置失败: " + file, e);
@@ -40,7 +43,12 @@ public record AgentConfig(String serverUrl, String token, String deviceId, List<
         require(token != null && !token.isBlank(), "token 不能为空");
         require(deviceId != null && !deviceId.isBlank(), "deviceId 不能为空");
         require(roots != null && !roots.isEmpty(), "roots 不能为空");
+        for (Root root : roots) {
+            require(root != null && root.path() != null && !root.path().isBlank(),
+                "roots[].path 不能为空");
+        }
         require(intervalMinutes > 0, "intervalMinutes 必须为正数");
+        require(maxRetries > 0, "maxRetries 必须为正数");
         require(retryBackoffMs >= 0, "retryBackoffMs 不能为负");
     }
 
