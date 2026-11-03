@@ -7,7 +7,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -74,18 +73,15 @@ class ConfigTest {
     }
 
     @Test
-    void saveSupportsRelativeFileWithoutParent() throws Exception {
+    void saveSupportsNestedRelativePathWithoutPreExistingParent() throws Exception {
         var cfg = new AgentConfig("http://nas.local:8080", "tok", "dev-1",
             List.of(new AgentConfig.Root("/tmp/a", "a")), 360, true,
             List.of("**/.git/**"), 3, 500L);
-        Path relative = Path.of("config-no-parent-" + UUID.randomUUID() + ".json");
-        try {
-            cfg.save(relative);
-            assertTrue(Files.exists(relative));
-            assertEquals(cfg, AgentConfig.load(relative));
-        } finally {
-            Files.deleteIfExists(relative);
-        }
+        Path nested = dir.resolve("nested/config.json");
+        assertTrue(Files.notExists(nested.getParent()));
+        cfg.save(nested);
+        assertTrue(Files.exists(nested));
+        assertEquals(cfg, AgentConfig.load(nested));
     }
 
     @Test

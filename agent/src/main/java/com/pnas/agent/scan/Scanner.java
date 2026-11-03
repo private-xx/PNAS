@@ -25,6 +25,7 @@ public final class Scanner {
 
     public List<FileItem> scan(Path root, String remoteName, List<String> excludes, int chunkSize)
             throws IOException {
+        String remotePrefix = normalizeRemoteName(remoteName);
         List<PathMatcher> matchers = compile(excludes);
         List<FileItem> items = new ArrayList<>();
         Files.walkFileTree(root, Set.of(), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
@@ -48,9 +49,9 @@ public final class Scanner {
                 if (excluded(matchers, relUnderRoot, false)) {
                     return FileVisitResult.CONTINUE;
                 }
-                String relPath = remoteName == null || remoteName.isBlank()
+                String relPath = remotePrefix.isEmpty()
                     ? relUnderRoot
-                    : remoteName + "/" + relUnderRoot;
+                    : remotePrefix + "/" + relUnderRoot;
                 String[] hashes = ChunkHashes.firstAndLast(file, chunkSize);
                 items.add(new FileItem(relPath, file, attrs.size(),
                     attrs.lastModifiedTime().toInstant(), hashes[0], hashes[1]));
@@ -58,6 +59,18 @@ public final class Scanner {
             }
         });
         return items;
+    }
+
+    /** 去掉首尾空白与末尾斜杠;全空白或全斜杠视为空。 */
+    private static String normalizeRemoteName(String remoteName) {
+        if (remoteName == null || remoteName.isBlank()) {
+            return "";
+        }
+        String name = remoteName.trim();
+        while (name.endsWith("/")) {
+            name = name.substring(0, name.length() - 1);
+        }
+        return name;
     }
 
     private static List<PathMatcher> compile(List<String> excludes) {

@@ -15,6 +15,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -63,6 +64,21 @@ class ScannerTest {
         assertEquals(sha("aaa".getBytes()), a.firstChunkSha());
         assertEquals(sha("aaa".getBytes()), a.lastChunkSha());
         assertEquals(3L, a.size());
+        assertEquals(dir.resolve("a.txt"), a.path());
+        assertEquals(Files.getLastModifiedTime(dir.resolve("a.txt")).toInstant(), a.mtime());
+    }
+
+    @Test
+    void normalizesTrailingSlashAndBlankRemoteName() throws Exception {
+        Files.writeString(dir.resolve("a.txt"), "aaa");
+
+        var trailingSlash = new Scanner().scan(dir, "root/", List.of(), CHUNK);
+        assertEquals(List.of("root/a.txt"),
+            trailingSlash.stream().map(FileItem::relPath).toList());
+
+        var blank = new Scanner().scan(dir, "  ", List.of(), CHUNK);
+        assertEquals(List.of("a.txt"),
+            blank.stream().map(FileItem::relPath).toList());
     }
 
     @Test
@@ -144,6 +160,34 @@ class ScannerTest {
         String[] exactHashes = ChunkHashes.firstAndLast(exactFile, CHUNK);
         assertEquals(sha(exact), exactHashes[0]);
         assertEquals(sha(exact), exactHashes[1]);
+    }
+
+    @Test
+    void chunkHashesOfExactMultipleFileUseLastFullChunk() throws Exception {
+        byte[] firstChunk = new byte[CHUNK];
+        Arrays.fill(firstChunk, (byte) 11);
+        byte[] secondChunk = new byte[CHUNK];
+        Arrays.fill(secondChunk, (byte) 22);
+        byte[] content = new byte[CHUNK * 2];
+        System.arraycopy(firstChunk, 0, content, 0, CHUNK);
+        System.arraycopy(secondChunk, 0, content, CHUNK, CHUNK);
+        Path file = dir.resolve("two-chunks.bin");
+        Files.write(file, content);
+
+        String[] hashes = ChunkHashes.firstAndLast(file, CHUNK);
+
+        assertEquals(sha(firstChunk), hashes[0]);
+        assertEquals(sha(secondChunk), hashes[1]);
+        // 旧公式 (size / chunkSize) * chunkSize 会把末块起点算到文件末尾,得到空串哈希。
+        assertNotEquals(sha(new byte[0]), hashes[1]);
+    }
+
+    @Test
+    void chunkHashesRejectNonPositiveChunkSize() throws Exception {
+        Path file = dir.resolve("x.bin");
+        Files.writeString(file, "x");
+        assertThrows(IllegalArgumentException.class, () -> ChunkHashes.firstAndLast(file, 0));
+        assertThrows(IllegalArgumentException.class, () -> ChunkHashes.firstAndLast(file, -1));
     }
 
     @Test
