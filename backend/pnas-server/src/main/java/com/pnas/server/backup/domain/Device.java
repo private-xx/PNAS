@@ -17,7 +17,7 @@ public class Device {
     @Column(nullable = false) private String name;
     @Enumerated(EnumType.STRING) @Column(nullable = false) private DevicePlatform platform;
     @Column(name = "pat_hash", nullable = false, unique = true) private String patHash;
-    @Column(name = "created_at", nullable = false, insertable = false, updatable = false) private Instant createdAt;
+    @Column(name = "created_at", nullable = false, updatable = false) private Instant createdAt;
     @Column(name = "last_seen_at") private Instant lastSeenAt;
     @Column(name = "revoked_at") private Instant revokedAt;
 
@@ -28,6 +28,7 @@ public class Device {
         d.name = name;
         d.platform = platform;
         d.patHash = patHash;
+        d.createdAt = Instant.now();
         return d;
     }
     public void touch() { this.lastSeenAt = Instant.now(); }

@@ -34,16 +34,23 @@ class SchemaMigrationTest extends AbstractIntegrationTest {
     @Test
     void backupTablesExistWithExpectedColumns() {
         var devices = jdbc.queryForList(
-            "select column_name from information_schema.columns where table_name = 'devices'", String.class);
+            "select column_name from information_schema.columns where table_name = 'devices' and table_schema = 'public'",
+            String.class);
         assertThat(devices).contains("id", "user_id", "name", "platform", "pat_hash",
             "created_at", "last_seen_at", "revoked_at");
         var runs = jdbc.queryForList(
-            "select column_name from information_schema.columns where table_name = 'backup_runs'", String.class);
+            "select column_name from information_schema.columns where table_name = 'backup_runs' and table_schema = 'public'",
+            String.class);
         assertThat(runs).contains("id", "device_id", "user_id", "mode", "status", "started_at",
             "finished_at", "files_seen", "files_uploaded", "files_skipped", "files_failed",
             "bytes_uploaded", "error");
         var fv = jdbc.queryForList(
-            "select column_name from information_schema.columns where table_name = 'file_versions'", String.class);
+            "select column_name from information_schema.columns where table_name = 'file_versions' and table_schema = 'public'",
+            String.class);
         assertThat(fv).contains("source_mtime");
+        var sessions = jdbc.queryForList(
+            "select column_name from information_schema.columns where table_name = 'upload_sessions' and table_schema = 'public'",
+            String.class);
+        assertThat(sessions).contains("source_mtime");
     }
 }

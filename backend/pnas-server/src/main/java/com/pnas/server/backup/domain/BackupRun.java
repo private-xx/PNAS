@@ -18,7 +18,7 @@ public class BackupRun {
     private User user;
     @Enumerated(EnumType.STRING) @Column(nullable = false) private RunMode mode;
     @Enumerated(EnumType.STRING) @Column(nullable = false) private RunStatus status = RunStatus.RUNNING;
-    @Column(name = "started_at", nullable = false, insertable = false, updatable = false) private Instant startedAt;
+    @Column(name = "started_at", nullable = false, updatable = false) private Instant startedAt;
     @Column(name = "finished_at") private Instant finishedAt;
     @Column(name = "files_seen", nullable = false) private int filesSeen;
     @Column(name = "files_uploaded", nullable = false) private int filesUploaded;
@@ -33,6 +33,7 @@ public class BackupRun {
         r.device = device;
         r.user = user;
         r.mode = mode;
+        r.startedAt = Instant.now();
         return r;
     }
     public void finish(RunStatus status, int seen, int uploaded, int skipped, int failed, long bytes, String error) {

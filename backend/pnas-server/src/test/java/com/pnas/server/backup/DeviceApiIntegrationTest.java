@@ -38,6 +38,7 @@ class DeviceApiIntegrationTest extends AbstractIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.token").isNotEmpty())
             .andExpect(jsonPath("$.device.platform").value("MAC"))
+            .andExpect(jsonPath("$.device.createdAt").isNotEmpty())
             .andReturn().getResponse().getContentAsString();
         String deviceId = JsonPath.read(body, "$.device.id");
         String token = JsonPath.read(body, "$.token");
