@@ -42,10 +42,26 @@ public final class NodeClient {
                 .findFirst();
             if (existing.isPresent()) {
                 current = existing.get().id();
-            } else {
+                continue;
+            }
+            try {
                 Map<?, ?> created = http.post("/api/v1/nodes",
                     Map.of("parentId", parent.toString(), "name", name), Map.class);
                 current = UUID.fromString(created.get("id").toString());
+            } catch (AgentException e) {
+                // 真实 POST /nodes 对同名节点返回 409:回读父目录,复用已存在的 DIR。
+                if (e.status() != 409) {
+                    throw e;
+                }
+                NodeDto conflict = listChildren(parent).stream()
+                    .filter(c -> name.equals(c.name()))
+                    .findFirst()
+                    .orElseThrow(() -> new AgentException(409,
+                        "同名节点冲突且回读不到: " + name));
+                if (!"DIR".equals(conflict.kind())) {
+                    throw new AgentException(409, "同名节点不是目录: " + name);
+                }
+                current = conflict.id();
             }
         }
         return current;

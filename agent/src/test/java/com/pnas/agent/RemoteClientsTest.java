@@ -104,6 +104,117 @@ class RemoteClientsTest {
     }
 
     @Test
+    void manifestCursorEscapesSpecialCharactersAcrossPages() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            stub.seedFile("A b/c&d.txt", "one");
+            stub.seedFile("A b/e.txt", "two");
+            HttpJson http = new HttpJson(stub.baseUrl(), "t");
+            ManifestClient manifests = new ManifestClient(http);
+
+            ManifestClient.Page first = manifests.page("dev-1", null, 1);
+            assertEquals(1, first.items().size());
+            assertEquals("A b/c&d.txt", first.items().get(0).relPath());
+            assertNotNull(first.nextCursor(), "还有下一页时必须给出 cursor");
+
+            List<ManifestEntry> all = manifests.all("dev-1", 1);
+            assertEquals(List.of("A b/c&d.txt", "A b/e.txt"),
+                all.stream().map(ManifestEntry::relPath).toList(),
+                "含空格/&//的 relPath 游标必须正确编码并继续翻页");
+        }
+    }
+
+    @Test
+    void manifestAllReturnsEveryEntryOfTwoFileManifest() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            stub.seedFile("a.txt", "1");
+            stub.seedFile("b.txt", "2");
+            HttpJson http = new HttpJson(stub.baseUrl(), "t");
+            List<ManifestEntry> all = new ManifestClient(http).all("dev-1");
+            assertEquals(2, all.size(), "两文件清单应完整返回 2 条");
+            assertEquals(List.of("a.txt", "b.txt"),
+                all.stream().map(ManifestEntry::relPath).toList());
+        }
+    }
+
+    @Test
+    void chunkWithWrongSha256IsRejected() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            HttpJson http = new HttpJson(stub.baseUrl(), "t");
+            UploadClient uploads = new UploadClient(http);
+            byte[] content = "abc".getBytes(StandardCharsets.UTF_8);
+            UUID uploadId = uploads.start(StubServer.ROOT, "x.txt", content.length,
+                Instant.parse("2026-10-03T10:00:00Z"));
+
+            AgentException e = assertThrows(AgentException.class,
+                () -> http.putBytes("/api/v1/uploads/" + uploadId + "/chunks/0",
+                    content, "0".repeat(64)), "错误的 X-Sha256 必须被拒绝");
+            assertEquals(400, e.status());
+        }
+    }
+
+    @Test
+    void chunkSequenceOutOfRangeIsRejected() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            HttpJson http = new HttpJson(stub.baseUrl(), "t");
+            UploadClient uploads = new UploadClient(http);
+            byte[] content = "abc".getBytes(StandardCharsets.UTF_8);
+            UUID uploadId = uploads.start(StubServer.ROOT, "x.txt", content.length,
+                Instant.parse("2026-10-03T10:00:00Z"));
+
+            AgentException e = assertThrows(AgentException.class,
+                () -> uploads.putChunk(uploadId, 1, content), "越界 seq 必须被拒绝");
+            assertEquals(400, e.status());
+        }
+    }
+
+    @Test
+    void completeReusesSameNameFileAndBumpsVersion() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            HttpJson http = new HttpJson(stub.baseUrl(), "t");
+            UploadClient uploads = new UploadClient(http);
+            NodeClient nodes = new NodeClient(http);
+
+            byte[] first = "one".getBytes(StandardCharsets.UTF_8);
+            UUID firstUpload = uploads.start(StubServer.ROOT, "same.txt", first.length, null);
+            uploads.putChunk(firstUpload, 0, first);
+            UUID firstNode = uploads.complete(firstUpload);
+
+            byte[] second = "two2".getBytes(StandardCharsets.UTF_8);
+            UUID secondUpload = uploads.start(StubServer.ROOT, "same.txt", second.length, null);
+            uploads.putChunk(secondUpload, 0, second);
+            UUID secondNode = uploads.complete(secondUpload);
+
+            assertEquals(firstNode, secondNode, "同名文件必须复用节点而不是追加重复节点");
+            assertArrayEquals(second, nodes.download(secondNode));
+            List<ManifestEntry> all = new ManifestClient(http).all("dev-1");
+            assertEquals(1, all.size(), "同名文件覆盖后清单应仍只有一条");
+            assertEquals(2, all.get(0).versionNo(), "重写同名文件必须递增版本");
+        }
+    }
+
+    @Test
+    void ensureDirCreatesMultiSegmentPathIdempotentlyAndRejectsFileConflict() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            HttpJson http = new HttpJson(stub.baseUrl(), "t");
+            NodeClient nodes = new NodeClient(http);
+
+            UUID ab = nodes.ensureDir(StubServer.ROOT, "A/B");
+            assertEquals(ab, nodes.ensureDir(StubServer.ROOT, "A/B"),
+                "多级 ensureDir 必须幂等");
+            UUID a = nodes.listChildren(StubServer.ROOT).stream()
+                .filter(n -> "A".equals(n.name())).findFirst().orElseThrow().id();
+            assertEquals(1, nodes.listChildren(a).size(), "重复 ensureDir 不应产生重复目录");
+            assertEquals(ab, nodes.listChildren(a).get(0).id());
+
+            stub.seedFile("C/D", "occupied");
+            AgentException e = assertThrows(AgentException.class,
+                () -> nodes.ensureDir(StubServer.ROOT, "C/D"),
+                "同名 FILE 占位时 ensureDir 必须失败而不是静默建目录");
+            assertEquals(409, e.status());
+        }
+    }
+
+    @Test
     void revokedTokenRaisesUnauthorized() throws Exception {
         try (StubServer stub = new StubServer()) {
             stub.revokedToken = "bad-token";

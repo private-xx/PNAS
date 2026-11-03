@@ -1,11 +1,13 @@
 package com.pnas.agent;
 
+import com.pnas.agent.remote.Sha256;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -23,6 +25,9 @@ public final class StubServer implements AutoCloseable {
 
     /** 固定根节点,使第二轮清单可跳过。 */
     public static final UUID ROOT = UUID.fromString("00000000-0000-0000-0000-000000000001");
+
+    /** 与服务端一致的 4 MiB 分块上限。 */
+    private static final int CHUNK_SIZE = 4 * 1024 * 1024;
 
     public final HttpServer server;
     public final List<String> uploadedPaths = Collections.synchronizedList(new ArrayList<>());
@@ -127,11 +132,14 @@ public final class StubServer implements AutoCloseable {
         var body = Json.read(ex.getRequestBody().readAllBytes());
         UUID parent = UUID.fromString((String) body.get("parentId"));
         String name = (String) body.get("name");
-        UUID id = findDir(parent, name).orElseGet(() -> {
-            UUID created = UUID.randomUUID();
-            dirs.put(created, new Dir(created, parent, name));
-            return created;
-        });
+        // 真实 FilesService:同目录下同名节点(DIR 或 FILE)一律 409。
+        if (nodeExists(parent, name)) {
+            send(ex, 409, Json.write(Map.of("code", "NAME_CONFLICT",
+                "message", "同目录下已存在同名节点: " + name)));
+            return;
+        }
+        UUID id = UUID.randomUUID();
+        dirs.put(id, new Dir(id, parent, name));
         send(ex, 200, Json.write(Map.of("id", id.toString(), "name", name, "kind", "DIR")));
     }
 
@@ -153,15 +161,21 @@ public final class StubServer implements AutoCloseable {
         }
         items.sort(Comparator.comparing(m -> (String) m.get("relPath")));
 
-        int offset = parseInt(param(query, "cursor"), 0);
-        int limit = Math.max(1, parseInt(param(query, "limit"), 200));
-        int from = Math.min(offset, items.size());
-        int to = Math.min(items.size(), from + limit);
-        String nextCursor = to < items.size() ? String.valueOf(to) : null;
+        String cursor = param(query, "cursor");
+        int limit = Math.max(1, Math.min(200, parseInt(param(query, "limit"), 200)));
+        List<Map<String, Object>> filtered = items.stream()
+            .filter(m -> cursor.isEmpty()
+                || ((String) m.get("relPath")).compareTo(cursor) > 0)
+            .toList();
+        List<Map<String, Object>> pageItems = filtered.subList(0,
+            Math.min(filtered.size(), limit));
+        String nextCursor = filtered.size() > limit
+            ? (String) pageItems.get(pageItems.size() - 1).get("relPath")
+            : null;
 
         Map<String, Object> page = new HashMap<>();
         page.put("rootNodeId", ROOT.toString());
-        page.put("items", items.subList(from, to));
+        page.put("items", pageItems);
         page.put("nextCursor", nextCursor);
         send(ex, 200, Json.write(page));
     }
@@ -189,8 +203,28 @@ public final class StubServer implements AutoCloseable {
             send(ex, 404, "{}");
             return;
         }
+        byte[] body = ex.getRequestBody().readAllBytes();
+        int seq = parseInt(path.split("/")[6], -1);
+        String sha = ex.getRequestHeaders().getFirst("X-Sha256");
+        int chunkCount = chunkCount(upload.size());
+        if (seq < 0 || seq >= chunkCount) {
+            send(ex, 400, Json.write(Map.of("code", "CHUNK_INVALID",
+                "message", "分块序号越界: " + seq + "(共 " + chunkCount + " 块)")));
+            return;
+        }
+        if (body.length > CHUNK_SIZE) {
+            send(ex, 400, Json.write(Map.of("code", "CHUNK_INVALID",
+                "message", "分块超过上限 " + CHUNK_SIZE + " 字节: " + body.length)));
+            return;
+        }
+        // 真实服务端只接受与正文匹配的小写 hex SHA-256。
+        if (sha == null || !sha.equals(Sha256.hex(body))) {
+            send(ex, 400, Json.write(Map.of("code", "CHUNK_INVALID",
+                "message", "分块 sha256 不匹配")));
+            return;
+        }
+        upload.bytes().writeBytes(body);
         chunkPuts.incrementAndGet();
-        upload.bytes().writeBytes(ex.getRequestBody().readAllBytes());
         send(ex, 204, "");
     }
 
@@ -201,13 +235,28 @@ public final class StubServer implements AutoCloseable {
             send(ex, 404, "{}");
             return;
         }
+        // 同名目录不能当作文件写入(真实 FilesService 409)。
+        if (findDir(upload.parent(), upload.name()).isPresent()) {
+            send(ex, 409, Json.write(Map.of("code", "NAME_CONFLICT",
+                "message", "同名目录已存在,不能作为文件写入: " + upload.name())));
+            return;
+        }
         byte[] content = upload.bytes().toByteArray();
-        UUID nodeId = UUID.randomUUID();
-        files.computeIfAbsent(upload.parent(), k -> new ArrayList<>())
-            .add(new FileDto(nodeId, upload.name(), upload.size(), Sha.first(content),
-                Sha.last(content), upload.sourceMtime(), Sha.manifest(content), 1, content));
+        List<FileDto> siblings = files.computeIfAbsent(upload.parent(), k -> new ArrayList<>());
+        FileDto existing = siblings.stream()
+            .filter(f -> f.name().equals(upload.name())).findFirst().orElse(null);
+        // 真实服务端:同目录同名 FILE → 复用节点并递增版本,而不是追加重复节点。
+        UUID nodeId = existing == null ? UUID.randomUUID() : existing.id();
+        int version = existing == null ? 1 : existing.version() + 1;
+        FileDto updated = new FileDto(nodeId, upload.name(), upload.size(), Sha.first(content),
+            Sha.last(content), upload.sourceMtime(), Sha.manifest(content), version, content);
+        if (existing == null) {
+            siblings.add(updated);
+        } else {
+            siblings.set(siblings.indexOf(existing), updated);
+        }
         uploadedPaths.add(upload.name());
-        send(ex, 200, Json.write(Map.of("nodeId", nodeId.toString(), "versionNo", 1)));
+        send(ex, 200, Json.write(Map.of("nodeId", nodeId.toString(), "versionNo", version)));
     }
 
     private void downloadNode(HttpExchange ex, String path) throws IOException {
@@ -265,6 +314,19 @@ public final class StubServer implements AutoCloseable {
             .map(Dir::id).findFirst();
     }
 
+    private boolean nodeExists(UUID parent, String name) {
+        return findDir(parent, name).isPresent()
+            || files.getOrDefault(parent, List.of()).stream()
+                .anyMatch(f -> f.name().equals(name));
+    }
+
+    private static int chunkCount(long size) {
+        if (size <= 0) {
+            return 0;
+        }
+        return (int) ((size + CHUNK_SIZE - 1) / CHUNK_SIZE);
+    }
+
     private static int parseInt(String value, int fallback) {
         if (value == null || value.isEmpty()) {
             return fallback;
@@ -282,11 +344,15 @@ public final class StubServer implements AutoCloseable {
         }
         for (String kv : query.split("&")) {
             String[] p = kv.split("=", 2);
-            if (p[0].equals(name)) {
-                return p.length > 1 ? p[1] : "";
+            if (decode(p[0]).equals(name)) {
+                return p.length > 1 ? decode(p[1]) : "";
             }
         }
         return "";
+    }
+
+    private static String decode(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }
 
     private static void sendRaw(HttpExchange ex, int status, byte[] bytes) throws IOException {
