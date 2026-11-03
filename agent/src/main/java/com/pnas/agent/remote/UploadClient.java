@@ -28,12 +28,15 @@ public final class UploadClient {
         return UUID.fromString(response.get("uploadId").toString());
     }
 
+    /** 分块 PUT:按 AgentConfig 的 maxRetries/retryBackoffMs 重试 5xx/429/IO。 */
     public void putChunk(UUID uploadId, int seq, byte[] chunk) throws IOException, InterruptedException {
-        http.putBytes("/api/v1/uploads/" + uploadId + "/chunks/" + seq, chunk, Sha256.hex(chunk));
+        http.putBytesWithRetry("/api/v1/uploads/" + uploadId + "/chunks/" + seq, chunk,
+            Sha256.hex(chunk));
     }
 
+    /** 完成上传:可安全重放(服务端按同名文件复用节点),因此同样带重试。 */
     public UUID complete(UUID uploadId) throws IOException, InterruptedException {
-        Map<?, ?> response = http.post("/api/v1/uploads/" + uploadId + "/complete",
+        Map<?, ?> response = http.postWithRetry("/api/v1/uploads/" + uploadId + "/complete",
             Map.of(), Map.class);
         return UUID.fromString(response.get("nodeId").toString());
     }

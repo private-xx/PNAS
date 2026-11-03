@@ -82,6 +82,17 @@ class ScannerTest {
     }
 
     @Test
+    void normalizesAbsoluteAndDotDotSegmentsInRemoteName() throws Exception {
+        Files.writeString(dir.resolve("a.txt"), "aaa");
+
+        // 绝对路径式前缀 + '.'/'..' 段都必须被丢弃,不能被拼进 relPath。
+        var items = new Scanner().scan(dir, "/root/./../photos/", List.of(), CHUNK);
+
+        assertEquals(List.of("root/photos/a.txt"),
+            items.stream().map(FileItem::relPath).toList());
+    }
+
+    @Test
     void skipsSymlinkedDirectories() throws Exception {
         Files.writeString(dir.resolve("real.txt"), "real");
         Path link = dir.resolve("linked");

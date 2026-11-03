@@ -97,10 +97,21 @@ public final class Runner {
                         try (InputStream in = Files.newInputStream(item.path())) {
                             byte[] buffer = new byte[chunkSize];
                             int seq = 0;
-                            int n;
-                            while ((n = in.read(buffer)) >= 0) {
+                            while (true) {
+                                int n = in.read(buffer);
+                                if (n < 0) {
+                                    break;
+                                }
+                                // 短读补齐:块必须填满,否则末块会被提前切小、清单首末块哈希对不上。
+                                while (n < buffer.length) {
+                                    int r = in.read(buffer, n, buffer.length - n);
+                                    if (r < 0) {
+                                        break;
+                                    }
+                                    n += r;
+                                }
                                 if (n == 0) {
-                                    continue;
+                                    break;
                                 }
                                 uploads.putChunk(uploadId, seq++, Arrays.copyOf(buffer, n));
                             }

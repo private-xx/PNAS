@@ -44,10 +44,17 @@ public final class ManifestClient {
     }
 
     /**
-     * 自动翻页拉取全部清单,对服务端返回的异常游标做终止守卫:
-     * 缺 items、空页仍给游标、游标重复/不前进、翻页数超限时抛 {@link AgentException}。
+     * 自动翻页拉取全部清单。整轮翻页是一个重试单元:遇到 IOException 或 5xx/429
+     * 时按配置从第一页重新拉取(最多 maxRetries 次),避免半份清单导致误判上传。
+     * 对服务端返回的异常游标做终止守卫:缺 items、空页仍给游标、游标重复/不前进、
+     * 翻页数超限时抛 {@link AgentException}(status=-1,不重试)。
      */
     public List<ManifestEntry> all(String deviceId, int pageSize)
+            throws IOException, InterruptedException {
+        return http.executeWithRetry(() -> walk(deviceId, pageSize));
+    }
+
+    private List<ManifestEntry> walk(String deviceId, int pageSize)
             throws IOException, InterruptedException {
         List<ManifestEntry> out = new ArrayList<>();
         Set<String> seenCursors = new HashSet<>();

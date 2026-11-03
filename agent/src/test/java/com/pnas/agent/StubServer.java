@@ -36,6 +36,29 @@ public final class StubServer implements AutoCloseable {
     public final List<String> startedRuns = Collections.synchronizedList(new ArrayList<>());
     public final List<String> finishedRuns = Collections.synchronizedList(new ArrayList<>());
     public final AtomicInteger chunkPuts = new AtomicInteger();
+    /** 分块 PUT 总尝试次数(含被注入的失败)。 */
+    public final AtomicInteger chunkPutAttempts = new AtomicInteger();
+    /** 清单 GET 总尝试次数(含被注入的失败)。 */
+    public final AtomicInteger manifestGetAttempts = new AtomicInteger();
+    /** 运行记录列表请求次数。 */
+    public final AtomicInteger runsListed = new AtomicInteger();
+
+    private final AtomicInteger failChunkPuts = new AtomicInteger();
+    private final AtomicInteger failManifestGets = new AtomicInteger();
+
+    /** 测试种子:让接下来 n 次分块 PUT 返回 500。 */
+    public void failNextChunkPuts(int n) {
+        failChunkPuts.set(Math.max(0, n));
+    }
+
+    /** 测试种子:让接下来 n 次清单 GET 返回 500。 */
+    public void failNextManifestGets(int n) {
+        failManifestGets.set(Math.max(0, n));
+    }
+
+    private static boolean consumeInjection(AtomicInteger counter) {
+        return counter.getAndUpdate(v -> v > 0 ? v - 1 : 0) > 0;
+    }
 
     private final Map<UUID, Dir> dirs = new HashMap<>();
     private final Map<UUID, List<FileDto>> files = new HashMap<>();
@@ -92,6 +115,8 @@ public final class StubServer implements AutoCloseable {
             createNode(ex);
         } else if (path.equals("/api/v1/backup/manifest") && method.equals("GET")) {
             sendManifest(ex, query);
+        } else if (path.equals("/api/v1/backup/runs") && method.equals("GET")) {
+            listRuns(ex, query);
         } else if (path.equals("/api/v1/backup/runs") && method.equals("POST")) {
             startRun(ex);
         } else if (path.startsWith("/api/v1/backup/runs/") && method.equals("PATCH")) {
@@ -147,6 +172,11 @@ public final class StubServer implements AutoCloseable {
     }
 
     private void sendManifest(HttpExchange ex, String query) throws IOException {
+        manifestGetAttempts.incrementAndGet();
+        if (consumeInjection(failManifestGets)) {
+            send(ex, 500, "{\"error\":\"injected manifest failure\"}");
+            return;
+        }
         List<Map<String, Object>> items = new ArrayList<>();
         for (var entry : files.entrySet()) {
             for (FileDto f : entry.getValue()) {
@@ -183,6 +213,21 @@ public final class StubServer implements AutoCloseable {
         send(ex, 200, Json.write(page));
     }
 
+    private void listRuns(HttpExchange ex, String query) throws IOException {
+        runsListed.incrementAndGet();
+        int limit = Math.max(1, Math.min(200, parseInt(param(query, "limit"), 50)));
+        Map<String, Object> run = new HashMap<>();
+        run.put("id", "11111111-1111-1111-1111-111111111111");
+        run.put("deviceId", param(query, "deviceId"));
+        run.put("mode", "MANUAL");
+        run.put("status", "SUCCESS");
+        run.put("startedAt", "2026-11-03T10:00:00Z");
+        run.put("filesSeen", 1);
+        run.put("filesUploaded", 1);
+        List<Map<String, Object>> out = new ArrayList<>(List.of(run));
+        send(ex, 200, Json.write(out.subList(0, Math.min(limit, out.size()))));
+    }
+
     private void startRun(HttpExchange ex) throws IOException {
         Json.read(ex.getRequestBody().readAllBytes());
         UUID id = UUID.randomUUID();
@@ -200,6 +245,11 @@ public final class StubServer implements AutoCloseable {
     }
 
     private void putChunk(HttpExchange ex, String path) throws IOException {
+        chunkPutAttempts.incrementAndGet();
+        if (consumeInjection(failChunkPuts)) {
+            send(ex, 500, "{\"error\":\"injected chunk failure\"}");
+            return;
+        }
         UUID uploadId = UUID.fromString(path.split("/")[4]);
         Upload upload = uploads.get(uploadId);
         if (upload == null) {

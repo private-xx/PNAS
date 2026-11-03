@@ -44,18 +44,112 @@ public final class Main {
 
     static int run(String[] args) {
         if (args.length == 0) {
-            System.err.println("用法: init|run|backup|restore|verify|status ...");
+            System.err.println(USAGE);
             return 2;
         }
         return switch (args[0]) {
-            case "init" -> 0;
-            case "status" -> 0;
+            case "init" -> init(args);
+            case "status" -> status(args);
             case "run" -> daemon(args);
             case "backup" -> backup(args);
             case "restore" -> restore(args);
             case "verify" -> verify(args);
             default -> throw new IllegalArgumentException("未知子命令: " + args[0]);
         };
+    }
+
+    private static final String USAGE = """
+        用法:
+          init --server <url> --token <t> --device <id> --root <path[:remoteName]> [--root ...] [--config <file>]
+          status [--config <file>]
+          run [--no-watch] [--config <file>]
+          backup --once [--config <file>]
+          restore --config <file> --path <relPath> --dest <dir> [--overwrite]
+          verify --config <file> [--all | --limit N]""";
+
+    /**
+     * {@code init ...}:生成配置文件(intervalMinutes=360、realtime=true、exclude=[]、
+     * maxRetries=3、retryBackoffMs=500)并打印写入路径。
+     */
+    private static int init(String[] args) {
+        Path configFile = defaultConfigFile();
+        String serverUrl = null;
+        String token = null;
+        String deviceId = null;
+        List<AgentConfig.Root> roots = new ArrayList<>();
+        for (int i = 1; i < args.length; i++) {
+            switch (args[i]) {
+                case "--server" -> serverUrl = requireValue(args, ++i, "--server");
+                case "--token" -> token = requireValue(args, ++i, "--token");
+                case "--device" -> deviceId = requireValue(args, ++i, "--device");
+                case "--root" -> roots.add(parseRoot(requireValue(args, ++i, "--root")));
+                case "--config" -> configFile = Path.of(requireValue(args, ++i, "--config"));
+                default -> throw new IllegalArgumentException("未知参数: " + args[i]);
+            }
+        }
+        AgentConfig config = new AgentConfig(serverUrl, token, deviceId, roots, 360, true,
+            List.of(), 3, 500L);
+        config.validate();
+        config.save(configFile);
+        System.out.println("配置已写入: " + configFile);
+        return 0;
+    }
+
+    /**
+     * 解析 {@code <path[:remoteName]>}。Windows 盘符({@code C:\...}、{@code C:/...})
+     * 不当作远端名分隔符。
+     */
+    private static AgentConfig.Root parseRoot(String spec) {
+        int colon = spec.lastIndexOf(':');
+        if (colon > 0) {
+            String suffix = spec.substring(colon + 1);
+            boolean windowsDrive = colon == 1 && Character.isLetter(spec.charAt(0))
+                && (suffix.startsWith("/") || suffix.startsWith("\\"));
+            if (!windowsDrive && !suffix.isEmpty()
+                && !suffix.contains("/") && !suffix.contains("\\")) {
+                return new AgentConfig.Root(spec.substring(0, colon), suffix);
+            }
+        }
+        return new AgentConfig.Root(spec, null);
+    }
+
+    /** {@code status [--config <file>]}:打印配置摘要与最近一条运行记录。 */
+    private static int status(String[] args) {
+        Path configFile = defaultConfigFile();
+        for (int i = 1; i < args.length; i++) {
+            switch (args[i]) {
+                case "--config" -> configFile = Path.of(requireValue(args, ++i, "--config"));
+                default -> throw new IllegalArgumentException("未知参数: " + args[i]);
+            }
+        }
+        AgentConfig config = loadConfig(configFile);
+        if (config == null) {
+            return 2;
+        }
+        System.out.printf("serverUrl=%s%ndeviceId=%s%nintervalMinutes=%d%nrealtime=%s%n",
+            config.serverUrl(), config.deviceId(), config.intervalMinutes(), config.realtime());
+        for (AgentConfig.Root root : config.roots()) {
+            System.out.printf("root=%s remoteName=%s%n", root.path(),
+                root.remoteName() == null ? "" : root.remoteName());
+        }
+        try {
+            List<RunClient.RunView> runs = new RunClient(http(config))
+                .list(config.deviceId(), 1);
+            if (runs.isEmpty() || runs.get(0) == null) {
+                System.out.println("暂无运行记录");
+            } else {
+                RunClient.RunView latest = runs.get(0);
+                System.out.printf("最近运行: id=%s mode=%s status=%s startedAt=%s%n",
+                    latest.id(), latest.mode(), latest.status(), latest.startedAt());
+            }
+            return 0;
+        } catch (AgentException e) {
+            System.err.println("远程调用失败(" + e.status() + "): " + e.getMessage());
+            return 2;
+        } catch (Exception e) {
+            System.err.println("状态查询失败: " + e.getMessage());
+            return 2;
+        }
     }
 
     /** {@code run [--no-watch] [--config <file>]}:常驻,定时备份并按需实时监视。 */
@@ -281,7 +375,8 @@ public final class Main {
 
     /** 按配置装配 HTTP 客户端(backup/run/restore/verify 共用同一接线)。 */
     private static HttpJson http(AgentConfig config) {
-        return new HttpJson(config.serverUrl(), config.token());
+        return new HttpJson(config.serverUrl(), config.token())
+            .withRetry(config.maxRetries(), config.retryBackoffMs());
     }
 
     /** 按配置装配 Runner。 */

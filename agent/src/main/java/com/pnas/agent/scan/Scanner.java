@@ -61,16 +61,25 @@ public final class Scanner {
         return items;
     }
 
-    /** 去掉首尾空白与末尾斜杠;全空白或全斜杠视为空。 */
+    /**
+     * 规范化远端前缀:去掉首尾空白、绝对路径式的前导 '/'、空段与 '.'/'..' 段,
+     * 并以 '/' 重新拼接(等价于去掉末尾斜杠)。全部被丢弃时返回空串。
+     */
     private static String normalizeRemoteName(String remoteName) {
         if (remoteName == null || remoteName.isBlank()) {
             return "";
         }
-        String name = remoteName.trim();
-        while (name.endsWith("/")) {
-            name = name.substring(0, name.length() - 1);
+        StringBuilder normalized = new StringBuilder();
+        for (String segment : remoteName.trim().split("/", -1)) {
+            if (segment.isEmpty() || segment.equals(".") || segment.equals("..")) {
+                continue;
+            }
+            if (normalized.length() > 0) {
+                normalized.append('/');
+            }
+            normalized.append(segment);
         }
-        return name;
+        return normalized.toString();
     }
 
     private static List<PathMatcher> compile(List<String> excludes) {

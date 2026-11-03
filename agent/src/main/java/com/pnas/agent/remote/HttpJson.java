@@ -30,10 +30,81 @@ public final class HttpJson {
         .connectTimeout(Duration.ofSeconds(10)).build();
     private final String baseUrl;
     private final String token;
+    private int maxRetries;
+    private long retryBackoffMs;
 
     public HttpJson(String baseUrl, String token) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.token = token;
+    }
+
+    /**
+     * 配置重试策略:最多重试 {@code maxRetries} 次(不含首次尝试),
+     * 每次退避 {@code backoffMs * 2^n}(n 为已重试次数)。
+     */
+    public HttpJson withRetry(int maxRetries, long backoffMs) {
+        if (maxRetries < 0) {
+            throw new IllegalArgumentException("maxRetries 不能为负: " + maxRetries);
+        }
+        if (backoffMs < 0) {
+            throw new IllegalArgumentException("retryBackoffMs 不能为负: " + backoffMs);
+        }
+        this.maxRetries = maxRetries;
+        this.retryBackoffMs = backoffMs;
+        return this;
+    }
+
+    /** 可重试的远程操作。 */
+    @FunctionalInterface
+    public interface Action<T> {
+        T run() throws IOException, InterruptedException;
+    }
+
+    /**
+     * 按 {@link #withRetry(int, long)} 的策略执行一次操作。
+     * 仅重试 {@link IOException} 与 5xx/429 的 {@link AgentException};
+     * 4xx(含 401/403/409)绝不重试。中断立即恢复中断标记并向上抛出。
+     */
+    public <T> T executeWithRetry(Action<T> action) throws IOException, InterruptedException {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return action.run();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            } catch (IOException e) {
+                if (attempt >= maxRetries) {
+                    throw e;
+                }
+            } catch (AgentException e) {
+                if (!retryable(e) || attempt >= maxRetries) {
+                    throw e;
+                }
+            }
+            backoff(attempt);
+        }
+    }
+
+    /** 5xx 与 429 属于可重试的服务端临时故障。 */
+    public static boolean retryable(AgentException e) {
+        int status = e.status();
+        return status == 429 || (status >= 500 && status <= 599);
+    }
+
+    private void backoff(int attempt) throws InterruptedException {
+        long delay = retryBackoffMs;
+        for (int i = 0; i < attempt && delay > 0 && delay < Long.MAX_VALUE / 2; i++) {
+            delay *= 2;
+        }
+        if (delay <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
+        }
     }
 
     public <T> T get(String path, Class<T> type) throws IOException, InterruptedException {
@@ -83,6 +154,21 @@ public final class HttpJson {
             .PUT(HttpRequest.BodyPublishers.ofByteArray(body)).build(),
             HttpResponse.BodyHandlers.ofByteArray());
         requireSuccess(res, path);
+    }
+
+    /** 带重试的 POST(仅用于幂等/可安全重放的上传完成等调用)。 */
+    public <T> T postWithRetry(String path, Object body, Class<T> type)
+            throws IOException, InterruptedException {
+        return executeWithRetry(() -> post(path, body, type));
+    }
+
+    /** 带重试的分块 PUT。 */
+    public void putBytesWithRetry(String path, byte[] body, String sha256)
+            throws IOException, InterruptedException {
+        executeWithRetry(() -> {
+            putBytes(path, body, sha256);
+            return null;
+        });
     }
 
     public ObjectMapper mapper() {
