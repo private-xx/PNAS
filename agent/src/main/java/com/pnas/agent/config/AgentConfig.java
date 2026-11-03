@@ -11,8 +11,15 @@ import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AgentConfig(String serverUrl, String token, String deviceId, List<Root> roots,
-                          int intervalMinutes, boolean realtime, List<String> exclude,
+                          int intervalMinutes, Boolean realtime, List<String> exclude,
                           int maxRetries, long retryBackoffMs) {
+
+    /** 省略 {@code realtime} 键时按默认开启处理(Jackson 传 null)。 */
+    public AgentConfig {
+        if (realtime == null) {
+            realtime = Boolean.TRUE;
+        }
+    }
 
     public record Root(String path, String remoteName) {}
 

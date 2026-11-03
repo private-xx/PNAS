@@ -5,6 +5,7 @@ import java.nio.file.ClosedWatchServiceException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
@@ -66,7 +67,8 @@ public final class Watcher implements AutoCloseable {
         }
         try (DirectoryStream<Path> children = Files.newDirectoryStream(dir)) {
             for (Path child : children) {
-                if (Files.isDirectory(child)) {
+                // 不跟随符号链接,与 Scanner 的遍历语义一致。
+                if (Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
                     register(child);
                 }
             }
@@ -89,15 +91,13 @@ public final class Watcher implements AutoCloseable {
             }
             Path dir = (Path) key.watchable();
             for (WatchEvent<?> event : key.pollEvents()) {
-                if (event.kind() == StandardWatchEventKinds.OVERFLOW) {
-                    continue;
-                }
                 if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE) {
                     Path child = dir.resolve((Path) event.context());
-                    if (Files.isDirectory(child)) {
+                    if (Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
                         register(child);
                     }
                 }
+                // OVERFLOW 表示可能丢事件,同样触发一次重扫而不是跳过。
                 debouncer.trigger();
             }
             key.reset();

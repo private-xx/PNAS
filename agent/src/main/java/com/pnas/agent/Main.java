@@ -60,11 +60,11 @@ public final class Main {
 
     /** {@code run [--no-watch] [--config <file>]}:常驻,定时备份并按需实时监视。 */
     private static int daemon(String[] args) {
-        boolean watch = true;
+        boolean noWatch = false;
         Path configFile = defaultConfigFile();
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
-                case "--no-watch" -> watch = false;
+                case "--no-watch" -> noWatch = true;
                 case "--config" -> {
                     if (i + 1 >= args.length) {
                         throw new IllegalArgumentException("--config 需要配置文件路径");
@@ -79,6 +79,8 @@ public final class Main {
         if (config == null) {
             return 2;
         }
+        // 监视需配置开启且未被 --no-watch 显式关闭。
+        boolean watch = !noWatch && config.realtime();
 
         Runner runner = runner(config);
         Scheduler scheduler = new Scheduler(

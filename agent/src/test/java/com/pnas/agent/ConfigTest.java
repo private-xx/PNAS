@@ -29,6 +29,24 @@ class ConfigTest {
     }
 
     @Test
+    void missingRealtimeDefaultsToTrue() throws Exception {
+        Path file = dir.resolve("no-realtime.json");
+        Files.writeString(file, """
+            {
+              "serverUrl": "http://nas.local:8080",
+              "token": "tok",
+              "deviceId": "dev-1",
+              "roots": [{"path": "/tmp/a", "remoteName": "a"}],
+              "intervalMinutes": 360,
+              "exclude": ["**/.git/**"],
+              "maxRetries": 3,
+              "retryBackoffMs": 500
+            }
+            """);
+        assertTrue(AgentConfig.load(file).realtime(), "省略 realtime 键应默认为 true");
+    }
+
+    @Test
     void validateRejectsMissingFields() {
         var missingServerUrl = assertThrows(IllegalArgumentException.class,
             () -> new AgentConfig("", "t", "d",

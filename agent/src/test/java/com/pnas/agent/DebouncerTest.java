@@ -7,6 +7,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -28,5 +29,15 @@ class DebouncerTest {
             Thread.sleep(200);
             assertEquals(1, runs.get(), "连续触发只应合并为一次执行");
         }
+    }
+
+    @Test
+    void triggerAfterCloseIsNoOp() throws Exception {
+        AtomicInteger runs = new AtomicInteger();
+        Debouncer d = new Debouncer(50, runs::incrementAndGet);
+        d.close();
+        assertDoesNotThrow(d::trigger, "关闭后触发不应抛 RejectedExecutionException");
+        Thread.sleep(200);
+        assertEquals(0, runs.get(), "关闭后触发不应再执行动作");
     }
 }
