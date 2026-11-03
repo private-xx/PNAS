@@ -8,6 +8,7 @@ import com.pnas.agent.remote.Sha256;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,6 +53,9 @@ public final class Restorer {
         }
 
         Path destRoot = dest.toAbsolutePath().normalize();
+        if (Files.isSymbolicLink(destRoot)) {
+            throw new IllegalStateException("目标根目录是符号链接,拒绝写入: " + destRoot);
+        }
         int count = 0;
         for (ManifestEntry entry : targets) {
             String relative = relativeToBackup(entry.relPath());
@@ -61,6 +65,15 @@ public final class Restorer {
             Path target = destRoot.resolve(relative).normalize();
             if (!target.startsWith(destRoot)) {
                 throw new IllegalArgumentException("清单路径越界: " + entry.relPath());
+            }
+            rejectSymlinkPrefixes(destRoot, target);
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                if (Files.isSymbolicLink(target)) {
+                    throw new IllegalStateException("目标包含符号链接,拒绝写入: " + target);
+                }
+                if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IllegalStateException("目标已存在且不是普通文件: " + target);
+                }
             }
             if (Files.exists(target) && !overwrite) {
                 count++;
@@ -87,6 +100,25 @@ public final class Restorer {
     }
 
     /**
+     * 拒绝目标路径中已存在的符号链接前缀(最终目标单独判定),
+     * 避免经符号链接把内容写到 {@code destRoot} 之外。
+     */
+    private static void rejectSymlinkPrefixes(Path destRoot, Path target) {
+        Path relative = destRoot.relativize(target);
+        Path current = destRoot;
+        for (Path segment : relative) {
+            current = current.resolve(segment);
+            if (current.equals(target)) {
+                break;
+            }
+            if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)
+                    && Files.isSymbolicLink(current)) {
+                throw new IllegalStateException("目标包含符号链接,拒绝写入: " + current);
+            }
+        }
+    }
+
+    /**
      * 服务端清单哈希规则:按 {@code chunkSize} 分块,逐块 hex-sha256,
      * 拼接全部十六进制串后再取 sha256。
      */
@@ -106,9 +138,15 @@ public final class Restorer {
             throw new IllegalArgumentException("非法相对路径: " + relPath);
         }
         if (relPath.startsWith("/") || relPath.startsWith("\\")) {
+            // POSIX 绝对路径;Windows UNC(\\server\share)与 \\?\ 形式。
             throw new IllegalArgumentException("非法相对路径: " + relPath);
         }
-        for (String segment : relPath.split("/", -1)) {
+        if (relPath.length() >= 2 && relPath.charAt(1) == ':'
+                && Character.isLetter(relPath.charAt(0))) {
+            // Windows 驱动器形式:C:\...、C:/...、C:relative。
+            throw new IllegalArgumentException("非法相对路径: " + relPath);
+        }
+        for (String segment : relPath.split("[/\\\\]", -1)) {
             if (segment.equals("..")) {
                 throw new IllegalArgumentException("非法相对路径: " + relPath);
             }
