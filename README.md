@@ -12,7 +12,7 @@
 | M1 | 架构设计 | ✅ [architecture-design.md](docs/architecture-design.md) v0.3(ADR-01~12) |
 | M2 | MVP:账号/ACL/文件管理/分块上传下载/回收站 + Vue Web | ✅ **已合并**(PR #1);[交付与决策](docs/m2-delivery.md) |
 | M3 | 媒体:入库/缩略图/时间线/日期相册/直放视频/任务中心 | ✅ **已合并**(PR #2);[交付与决策](docs/m3-delivery.md) |
-| M4a | 备份 Agent(设备/PAT + 增量备份三模式 + 运行仪表盘 + 最小恢复/校验 + jpackage) | ✅ **已交付**(分支 `m4a-backup`;验收 36/36) |
+| M4a | 备份 Agent(设备/PAT + 增量备份三模式 + 运行仪表盘 + 最小恢复/校验 + jpackage) | ✅ **已合并**(PR #3;验收 36/36) |
 | M4b | 出站备份 + 恢复演练 + 告警 | 🔜 下一阶段 |
 | M5 | 影音(刮削/转码)+ 安全加固/外网访问 | 待启动 |
 | M6 | 试运行与文档 | 待启动 |

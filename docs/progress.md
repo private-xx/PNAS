@@ -145,3 +145,6 @@ cd backend && mvn spring-boot:run # 需本地 PostgreSQL 或 docker compose up -
 # 一键部署
 cd deploy && cp .env.example .env && docker compose up -d --build
 ```
+
+### M4a 合并
+- PR **#3** 已合并(`bcbc4c9`,merge commit),`main` 与 `m4a-backup` 树一致;合并后后端 156/156、Agent 60/60 复跑通过。
