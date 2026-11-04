@@ -331,6 +331,7 @@ git commit -m "feat(m4a): 设备/运行记录迁移与实体"
 **Files:**
 - Create: `backend/pnas-server/src/main/java/com/pnas/server/backup/DeviceService.java`
 - Create: `backend/pnas-server/src/main/java/com/pnas/server/backup/DeviceController.java`
+- Modify: `backend/pnas-server/src/test/java/com/pnas/server/architecture/PackageArchitectureTest.java`(控制器白名单与"领域不得依赖 web"列表加入 `com.pnas.server.backup..`)
 - Test: `backend/pnas-server/src/test/java/com/pnas/server/backup/DeviceApiIntegrationTest.java`
 
 **Interfaces:**
@@ -573,7 +574,8 @@ public class DeviceController {
 
 - [ ] **Step 4: 跑通过 + 全量**
 
-Run: `-Dtest='DeviceApiIntegrationTest'`,再跑全量(126+ 绿)。
+先更新 `PackageArchitectureTest`:在 `controllers_only_in_allowed_packages` 的 `resideInAnyPackage(...)` 加入 `"com.pnas.server.backup.."`,并在 `domain_packages_do_not_depend_on_web` 的模块列表加入同一包(不得删除/放宽其它规则);否则本任务的控制器会使 ArchUnit 失败。
+Run: `-Dtest='DeviceApiIntegrationTest,PackageArchitectureTest'`,再跑全量(126+ 绿)。
 
 - [ ] **Step 5: 提交**
 
@@ -1404,12 +1406,17 @@ public class ManifestService {
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.10.2</version>
+            <version>5.10.5</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -1418,7 +1425,7 @@ public class ManifestService {
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.4.1</version>
+                <version>3.4.2</version>
                 <configuration>
                     <archive>
                         <manifest>

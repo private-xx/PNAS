@@ -2,6 +2,7 @@ package com.pnas.server.web.security;
 
 import com.pnas.server.auth.ServerSessionRepository;
 import com.pnas.server.auth.SessionPrincipal;
+import com.pnas.server.backup.DeviceRepository;
 import com.pnas.server.iam.UserRepository;
 import com.pnas.server.iam.domain.User;
 import jakarta.servlet.FilterChain;
@@ -26,15 +27,46 @@ public class SessionAuthFilter extends OncePerRequestFilter {
 
     private final ServerSessionRepository sessions;
     private final UserRepository users;
+    private final DeviceRepository devices;
 
-    public SessionAuthFilter(ServerSessionRepository sessions, UserRepository users) {
+    public SessionAuthFilter(ServerSessionRepository sessions, UserRepository users,
+                             DeviceRepository devices) {
         this.sessions = sessions;
         this.users = users;
+        this.devices = devices;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res,
                                     FilterChain chain) throws ServletException, IOException {
+        String authorization = req.getHeader("Authorization");
+        // scheme 不区分大小写;只要 header 呈 Bearer 形态,就绝不再回退到 Cookie 认证
+        // (空令牌、畸形令牌同样按未认证处理),避免两种凭证语义混淆。
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer", 0, 6)) {
+            // 清掉可能残留的线程上下文,保证 Bearer 分支的认证结果只来自本次解析。
+            SecurityContextHolder.clearContext();
+            String raw = authorization.length() > 6 ? authorization.substring(6).trim() : "";
+            // 空白令牌不查库、不认证,保持未认证 → 由入口点统一返回 401。
+            if (!raw.isEmpty()) {
+                devices.findByPatHashAndRevokedAtIsNull(sha256(raw)).ifPresent(device ->
+                    users.findById(device.getUser().getId()).ifPresent(u -> {
+                        if (u.getStatus() != User.Status.ACTIVE) return;
+                        var principal = new SessionPrincipal(u.getId(), u.getUsername(),
+                            u.getRole(), null);
+                        var auth = new UsernamePasswordAuthenticationToken(
+                            principal, null, List.of(
+                            new SimpleGrantedAuthority("ROLE_" + u.getRole().name())));
+                        SecurityContextHolder.getContext().setAuthentication(auth);
+                        req.setAttribute(SessionPrincipal.class.getName(), principal);
+                        req.setAttribute("pnas.deviceId", device.getId());
+                        // 定向 UPDATE:仅在未吊销且超过 60s 节流窗口时刷新,避免读-改-写
+                        // 把并发吊销的设备又"复活"。
+                        devices.touch(device.getId(), Instant.now(), Instant.now().minusSeconds(60));
+                    }));
+            }
+            chain.doFilter(req, res);
+            return;
+        }
         String cookieValue = readCookieValue(req);
         if (cookieValue != null) {
             String hash = sha256(cookieValue);

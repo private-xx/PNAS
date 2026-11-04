@@ -12,17 +12,20 @@
 | M1 | 架构设计 | ✅ [architecture-design.md](docs/architecture-design.md) v0.3(ADR-01~12) |
 | M2 | MVP:账号/ACL/文件管理/分块上传下载/回收站 + Vue Web | ✅ **已合并**(PR #1);[交付与决策](docs/m2-delivery.md) |
 | M3 | 媒体:入库/缩略图/时间线/日期相册/直放视频/任务中心 | ✅ **已合并**(PR #2);[交付与决策](docs/m3-delivery.md) |
-| M4 | 自动上传与备份 Agent(macOS/Windows)+ 恢复演练 | 🔜 下一阶段 |
+| M4a | 备份 Agent(设备/PAT + 增量备份三模式 + 运行仪表盘 + 最小恢复/校验 + jpackage) | ✅ **已交付**(分支 `m4a-backup`;验收 36/36) |
+| M4b | 出站备份 + 恢复演练 + 告警 | 🔜 下一阶段 |
 | M5 | 影音(刮削/转码)+ 安全加固/外网访问 | 待启动 |
 | M6 | 试运行与文档 | 待启动 |
 
-**已实现能力**:服务端会话 + CSRF、RBAC(仅管理员建用户)与目录级 ACL(默认拒绝/显式 DENY 全链优先)、4 MiB 分块断点续传与 sha256 内容寻址去重、版本化写入(绝不静默覆盖)、回收站恢复、EXIF/MP4 元数据入库、异步缩略图(256/512)、时间线(本地日期分组 + 月桶)、日期相册、图片查看器、直放视频(Range)、任务中心(重试/取消/重建媒体索引)。
+**已实现能力**:服务端会话 + CSRF、RBAC(仅管理员建用户)与目录级 ACL(默认拒绝/显式 DENY 全链优先)、4 MiB 分块断点续传与 sha256 内容寻址去重、版本化写入(绝不静默覆盖)、回收站恢复、EXIF/MP4 元数据入库、异步缩略图(256/512)、时间线(本地日期分组 + 月桶)、日期相册、图片查看器、直放视频(Range)、任务中心(重试/取消/重建媒体索引);**M4a 备份 Agent**:设备一次性令牌(Bearer、仅存哈希)、按 size+mtime+首末块哈希增量、手动/定时/实时(WatchService 防抖)三模式、运行记录与 Web 备份页、`restore`/`verify`(按服务端 manifest 哈希校验)、macOS jpackage 打包(Windows 文档)。
 
 ## 质量门禁(最近一次实测)
 
-- 后端全套件 **126/126 PASS**(Testcontainers PostgreSQL 16,含 M2 的 47 项)
+- 后端全套件 **156/156 PASS**(Testcontainers PostgreSQL 16;M3 126 + M4a 30)
+- Agent 模块 **60/60 PASS**(`agent/` 独立 Maven 模块;扫描/首末块/增量/HTTP/运行器/恢复/重试)
 - 前端 `npm run build`(vue-tsc 类型检查 + vite 打包)**PASS**
-- 端到端验收 **PASS=42 / FAIL=0**(`scripts/acceptance-m3.sh`,幂等;隔离/上传/缩略图/时间线/相册/回收站/视频 Range/重建索引)
+- M4a 端到端验收 **PASS=36 / FAIL=0**(`scripts/acceptance-m4.sh`,连跑两轮;设备/令牌/4 文件备份/增量/verify `checked=4`/restore `cmp`/吊销 401)
+- M3 端到端验收 **PASS=42 / FAIL=0**(`scripts/acceptance-m3.sh`,幂等;隔离/上传/缩略图/时间线/相册/回收站/视频 Range/重建索引)
 - 时间线性能(SC-3,1000 条):首屏中位 **0.0287s**(M3 验收)与 **0.0217s**(修复后复测),预算 ≤2s
 - 已知限制与偶发:见 [docs/progress.md](docs/progress.md) 与 [m3-delivery.md](docs/m3-delivery.md) 的边界章节
 
@@ -48,6 +51,12 @@ cd frontend && npm install && npm run dev
 PNAS_JOBS_SCHEDULER_ENABLED=true ...
 bash scripts/acceptance-m3.sh http://localhost:8080
 bash scripts/perf-m3-timeline.sh  http://localhost:8080   # 可选:1000 条时间线首屏
+
+# 6) 备份 Agent(独立模块)
+cd agent && /path/to/mvn -s ../.tools/maven-settings.xml package -DskipTests
+#   由 Web「备份」页创建设备 → 一次性令牌;或 agent init --server ... --token ... --device ... --root ...
+java -cp "target/classes:<jackson 等依赖>" com.pnas.agent.Main backup --once --config ~/.pnas-agent/config.json
+bash scripts/acceptance-m4.sh http://localhost:8080        # M4a 端到端验收
 ```
 
 常用环境变量:`PNAS_DB_URL` / `PNAS_DB_USER` / `PNAS_DB_PASSWORD`、`PNAS_DATA_DIR`(blobs/derived/tmp 根目录)、`PNAS_REQUIRE_TLS`、`PNAS_JOBS_SCHEDULER_ENABLED`、`PNAS_BOOTSTRAP_ADMIN_USERNAME` / `PNAS_BOOTSTRAP_ADMIN_PASSWORD`。
@@ -63,6 +72,7 @@ bash scripts/perf-m3-timeline.sh  http://localhost:8080   # 可选:1000 条时�
 | [进度记录](docs/progress.md) | 各里程碑结果、验收证据、环境与已知限制 |
 | [M2 交付与决策](docs/m2-delivery.md) | M2 证据、裁决与遗留项 |
 | [M3 交付与决策](docs/m3-delivery.md) | M3 证据、R1–R32 裁决、已接受边界与 M4/M5 衔接 |
+| [M4a 设计 spec](docs/superpowers/specs/2026-10-24-m4a-backup-agent-design.md) / [实施计划](docs/superpowers/plans/2026-10-24-m4a-backup-agent.md) | M4a 备份 Agent 的设计与 14 任务拆分 |
 | [M3 设计 spec](docs/superpowers/specs/2026-09-28-m3-media-design.md) / [实施计划](docs/superpowers/plans/2026-09-28-m3-media.md) | M3 的设计与任务拆分 |
 | [M2 实施计划](docs/superpowers/plans/2026-09-07-m2-mvp.md) | M2 的 14 任务计划 |
 
@@ -73,8 +83,8 @@ backend/    Maven 多模块:pnas-common / pnas-server(单体服务;media 模块�
 frontend/   Vue 3 + TypeScript(Vite),Element Plus;生产由 nginx 托管
 deploy/     docker-compose、Dockerfile、nginx 配置、env 示例
 docs/       需求/架构/进度/交付记录,以及 superpowers 下的 spec 与实施计划
-scripts/    acceptance-m2.sh / acceptance-m3.sh / perf-m3-timeline.sh 等验收与运维脚本
-agent/      (M4)桌面备份客户端
+scripts/    acceptance-m2.sh / acceptance-m3.sh / acceptance-m4.sh / perf-m3-timeline.sh 等验收与运维脚本
+agent/      M4a 桌面备份 Agent(独立 Maven 模块:扫描/增量/HTTP/运行器/恢复/打包)
 ```
 
 ## 开发前置要求

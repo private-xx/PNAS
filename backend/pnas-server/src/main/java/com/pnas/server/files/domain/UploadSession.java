@@ -56,6 +56,9 @@ public class UploadSession {
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(name = "source_mtime")
+    private Instant sourceMtime;
+
     /** 乐观锁:并发分块 PUT 会同时改 jsonb 三列,靠它避免丢失更新(P2 评审 Important#6)。 */
     @Version
     @Column(nullable = false)

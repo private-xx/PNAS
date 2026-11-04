@@ -1,6 +1,6 @@
 # PNAS 进度记录
 
-> 记录每个里程碑的关键结果与断点信息,便于随时恢复。最后更新:2026-10-22(M3 验收、性能实测与最终评审修复完成)。
+> 记录每个里程碑的关键结果与断点信息,便于随时恢复。最后更新:2026-11-03(M4a 最终整分支评审修复:重试/init/status/短读与 remoteName 加固)。
 
 ## 总体状态
 
@@ -10,8 +10,40 @@
 | M1 | 架构设计 | ✅ [architecture-design.md](architecture-design.md) v0.3,ADR-01~12 全部确认,与需求 v0.3 同步 |
 | M2 | MVP 实现 | ✅ **已合并进 `main`**(PR #1,合并提交 `dc5afe5`):14 任务全部实现并逐任务评审 + 三段最终评审;后端全套件 **47/47**、前端构建通过、端到端验收 **PASS=23/FAIL=0**;交付与决策记录见 [m2-delivery.md](m2-delivery.md) |
 | M3 | 媒体(时间线 / 日期相册 / 缩略图 / 视频播放) | ✅ **已合并进 `main`**(PR #2,合并提交 `3b12e96`):13 个任务实现完成;后端全套件 **126/126**、前端构建 PASS;验收 **PASS=42 / FAIL=0**;SC-3 时间线首屏 1000 条实测中位数 **0.0287s / 修复后复测 0.0217s**(预算 ≤2s);交付与决策见 [m3-delivery.md](m3-delivery.md) |
-| M4–M6 | 备份 / 流媒体加固 / 验收 | 待启动 |
+| M4 | 备份(桌面 Agent) | 🔄 **M4a 完成**(分支 `m4a-backup`,待合并):后端全套件 **156/156**、Agent **60/60**、E2E 验收 **PASS=36/FAIL=0**;macOS app-image 打包通过(dmg 受本机沙箱限制,见下);Windows 打包文档未实测;其余备份范围待启动 |
+| M5–M6 | 流媒体加固 / 验收 | 待启动 |
 | M7 | 后续立项(镜像同步、移动通道评估等 Could 项) | 待启动 |
+
+## M4a 完成情况(2026-11-03)
+
+- 范围:备份域后端(设备/令牌/运行记录/清单/上传携带 sourceMtime)、桌面 Agent(配置/扫描/增量/HTTP 客户端/备份/恢复/校验/实时监视/定时/失败重试/init·status 命令行)、Web 备份页;以及 macOS/Windows 打包、E2E 验收脚本与本文档。
+- 执行计划与账本:`.superpowers/sdd/2026-10-24-m4a-backup-agent/`(T1–T14;本文件即 T14 文档产出)。
+- **提交链**(`m4a-backup`,基于 `main`):`dc56c4b`(计划/插件锁定)→ `4d00e3e`/`17e9713`/`990b135`/`999be18`(设备、Bearer 令牌、运行记录)→ `c3ac80b`(清单)→ `4b277d7`…`3dad9bc`(Agent 骨架、扫描/增量、HTTP、运行器、监视/定时、恢复/校验)→ `cf1f9b9`(前端备份页)→ `191c5db`(恢复路径安全);截至 `b415991` 共 **26** 个实现/修复提交(`git log --oneline main..HEAD | wc -l` 实测),最终整分支评审修复提交紧随其后。
+- **质量门禁**:
+  - 后端全套件(HEAD `191c5db`,`mvn -o -s ../.tools/maven-settings.xml -pl pnas-server -am test`):**`Tests run: 156, Failures: 0, Errors: 0, Skipped: 0`**,BUILD SUCCESS(M3 为 126;M4a 新增 30 项)。
+  - Agent 模块(`cd agent && mvn -o -s ../.tools/maven-settings.xml test`):**`Tests run: 60, Failures: 0, Errors: 0, Skipped: 0`**(9 个测试类;M4a 基线 52,最终修复新增 8)。
+- **最终整分支评审修复(2026-11-03,`b415991` 之后)**:
+  - **重试实装**(此前 `maxRetries`/`retryBackoffMs` 是死配置):`HttpJson.withRetry(maxRetries, backoffMs)` 提供统一重试;`UploadClient.putChunk`/`complete` 最多重试 `maxRetries` 次(总尝试 1+N),指数退避 `retryBackoffMs, 2x, 4x…`,仅重试 `IOException` 与 5xx/429,401/403/409 等 4xx 绝不重试;`ManifestClient.all` 以整轮翻页为重试单元(IOException/5xx 时从第一页重拉),避免半份清单造成误判。`Main` 将配置值接入 `HttpJson`,配置真正生效。
+  - **`init`/`status` 不再是静默 no-op**:`init --server --token --device --root [--root …] [--config]` 生成配置(intervalMinutes=360、realtime=true、exclude=[]、maxRetries=3、retryBackoffMs=500)并打印写入路径;`status` 打印 serverUrl/deviceId/roots/interval/realtime,并查询 `GET /api/v1/backup/runs?limit=1` 展示最近运行(id/mode/status/startedAt),无记录时输出“暂无运行记录”。
+  - **健壮性**:`Runner` 分块读取改为短读补齐(循环读到满块或 EOF),避免 undersized chunk 导致首末块哈希与服务端不一致;`Scanner.normalizeRemoteName` 丢弃前导 `/`、空段与 `.`/`..` 段,防止远端路径逃逸。
+  - **`verify` 默认全量扫描**:实现默认 `limit=0` 即全量(规格曾写“抽样 20”),这是有意偏离——校验以完整性优先,抽样会漏报损坏文件;需要抽样时仍可用 `--limit N`。
+  - **打包限制不变**:Windows 打包/安装/任务计划仍未实测,macOS `.dmg` 仍受本机沙箱 `hdiutil` 限制,与下文一致。
+- **E2E 验收**:`scripts/acceptance-m4.sh`(幂等;`BASE` 参数,默认 `http://localhost:8080`;无 jq 依赖,python3 解析 JSON)。隔离环境:PostgreSQL 容器 `pnas-acc-db`(库 `pnas`,已含 V1–V4)、server `:8092`、`PNAS_DATA_DIR=/tmp/pnas-m4a-e2e`、`PNAS_REQUIRE_TLS=false`;同一构建连续两次 **PASS=36 / FAIL=0**。覆盖:
+  - admin 登录 HTTP 200 + CSRF 头;创建设备 HTTP 200 并返回设备 ID/令牌;
+  - 4 个源文件(含 5,000,000 字节大文件)首次备份退出码 0、`uploaded=4`;服务端节点树 `/自动备份/<deviceId>/Files/` 经 API 断言 4 个条目齐备(`a.txt`、`b.txt`、`big.bin`、`sub`)、`sub` 目录存在、`big.bin` 大小 = 5,000,000;`b.txt`/`big.bin`/`sub/c.txt` 的内容由后续 `verify --all` 下载并比对清单哈希覆盖(`sub/c.txt` 未单独走节点 API);
+  - 修改 `a.txt` 后二次备份退出码 0、`uploaded=1 skipped=3`、`a.txt` 最新版本 = 2(验证文件级增量);
+  - `verify --all` 退出码 0,脚本断言输出含 `checked=4 passed=4 failed=0`(打印该行);`restore --path Files/a.txt` 退出码 0 且 `cmp` 与源文件一致;
+  - 吊销设备 HTTP 204;随后备份返回 HTTP 401、agent 退出码 2。
+  - 环境备注:本机 `:8081` 被 2026-09-11 启动的旧 `pnas_fresh` 服务占用、`:8082` 有 node 进程监听 `[::1]`,故验收服务起在 `:8092`;未触碰 `:8080` 的既有服务。
+- **打包**:
+  - macOS:`agent/packaging/package-macos.sh`(jpackage + 手工 bundle,Jackson 三 jar 放入 `bundle/lib` 并写入 jar 清单 `Class-Path`)。本机 `jpackage --type dmg` 在 hdiutil 阶段失败,精确报错为 **`hdiutil: create failed - 操作不被允许`**(受限沙箱下 hdiutil 的 disk image 设备操作被拒绝,直接调用 `hdiutil create` 同样复现,非脚本逻辑错误);改用 `--type app-image` 成功生成 `agent/target/package/PNAS Agent.app`,并用该 app 对 `:8092` 实跑 `backup --once` → `seen=1 uploaded=1 failed=0`、退出码 0,证明 Jackson 依赖与入口随包可用。`.dmg` 需在非沙箱 macOS 终端复跑脚本确认。
+  - Windows:`agent/packaging/windows.md`(构建命令 + jpackage + Task Scheduler 注册 + 限制),**未实测**;与 macOS 相同,`--app-version` 固定为 `1.0.0`(jpackage 不允许首段为 0,项目版本 `0.1.0-SNAPSHOT` 不能直接使用)。
+- **已知限制与延后项(M4a 接受)**:
+  - Windows Agent 的打包、安装与任务计划未实测(当前仅文档);
+  - 增量是**文件级**(大小/mtime/首末块哈希),块级 delta 延后;大文件小改动会整文件重传;
+  - `audit_events` 表尚未创建,备份操作暂无独立审计事件(留待后续里程碑;当前库表清单中无该表);
+  - 清单构造为游标分页 + 每条版本查询首末块,存在 **N+1**;大库/大目录下 SQL 次数线性增长,规模化前需批量化;
+  - 设备令牌仅以哈希落库(创建时一次性返回),丢失需重建;吊销即时生效(验收已覆盖)。
 
 ## M3 完成情况(2026-10-22)
 

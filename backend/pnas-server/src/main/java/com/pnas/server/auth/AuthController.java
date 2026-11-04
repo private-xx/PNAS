@@ -61,7 +61,10 @@ public class AuthController {
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(@AuthenticationPrincipal SessionPrincipal me, HttpServletResponse res) {
-        auth.logout(me.sessionId());
+        // Bearer 设备令牌没有服务端会话(sessionId == null),此时只需清 Cookie。
+        if (me != null && me.sessionId() != null) {
+            auth.logout(me.sessionId());
+        }
         // 同时清除两个 Cookie,避免已吊销会话的 Cookie 残留
         res.addHeader(HttpHeaders.SET_COOKIE, ResponseCookie.from("PNAS_CSRF", "")
             .httpOnly(false).sameSite("Lax").path("/").maxAge(0).build().toString());
